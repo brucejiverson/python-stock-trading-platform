@@ -1,0 +1,14 @@
+# Ignore data and saved models
+.beasttrader/data
+
+# Ignore node_modules folder
+node_modules
+
+# Ignore all text files
+*.txt
+
+# Ignore local test environment
+.env
+
+# Ignore pycache files
+*pycache

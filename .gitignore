@@ -1,14 +1,13 @@
 # Ignore data and saved models
 .beasttrader/data
+.beasttrader/results
 
-# Ignore node_modules folder
-node_modules
-
-# Ignore all text files
-*.txt
+# Ignore all files containing account keys
+.beasttrader/polygon_key.txt
+.beasttrader/my_td_ameritrade/config/
 
 # Ignore local test environment
 .env
 
 # Ignore pycache files
-*pycache
+*__pycache__

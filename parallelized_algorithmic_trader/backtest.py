@@ -1,25 +1,24 @@
-from __future__ import annotations
 from typing import List, Dict, Tuple 
 import logging
-import pandas as pd
 import uuid
+import pandas as pd
 import matplotlib.pyplot as plt
 
-from beasttrader.indicators import IndicatorConfig, IndicatorMapping, aggregate_indicator_mappings
-from beasttrader.strategy import StrategySet, StrategyConfig
-from beasttrader.market_data import CandleData
-from beasttrader.exchange import SimulatedStockBrokerCandleData, SlippageModels, AccountSet, Account
-from beasttrader.performance_analysis import print_account_general_stats, get_best_strategy_and_account
-from beasttrader.visualizations import plot_trade_profit_hist, plot_backtest_results, plot_cumulative_returns, plot_underwater, visual_analysis_of_trades
-from beasttrader.backtest_tools import *
+from parallelized_algorithmic_trader.indicators import IndicatorMapping, aggregate_indicator_mappings
+from parallelized_algorithmic_trader.strategy import StrategySet, StrategyConfig
+from parallelized_algorithmic_trader.market_data import CandleData
+from parallelized_algorithmic_trader.broker import *
+from parallelized_algorithmic_trader.performance_analysis import print_account_stats, get_best_strategy_and_account
+from parallelized_algorithmic_trader.visualizations import plot_backtest_results, plot_cumulative_returns, visual_analysis_of_trades
+from parallelized_algorithmic_trader.util import printProgressBar, get_logger
 
 
-logger = logging.getLogger(__name__ )
+logger = get_logger(__name__ )
 
 
 # this is global so that we can make it once and then resuse it when doing consecutive backtests
 master_data:CandleData = None       # all of the data
-sim_data:CandleData = None          # all data that is valid for use
+sim_data:CandleData = None          # all data that is valid for use (all indicators initialized)
 
 train_test_split_flag = False
 train_data:CandleData = None
@@ -28,9 +27,9 @@ test_data:CandleData = None         # data that is used for testing
 
 def get_training_start_end_dates() -> Tuple[pd.Timestamp, pd.Timestamp]:
     if train_test_split_flag:
-        return train_data.start, train_data.end
+        return train_data.start_date, train_data.end_date
     else:
-        return sim_data.start, sim_data.end
+        return sim_data.start_date, sim_data.end_date
 
 
 def build_features(market_data:CandleData, indicator_mappings:List[IndicatorMapping]):
@@ -38,96 +37,49 @@ def build_features(market_data:CandleData, indicator_mappings:List[IndicatorMapp
     # this is done to prevent calculation of the features for consecutive backtests (can be somewhat time consuming)
     global master_data
     global sim_data
-
-    if master_data is None or master_data.df.index[0] != market_data.start or master_data.df.index[-1] != market_data.end:
+    
+    master_data_needs_update = master_data is None or master_data.df.index[0] != market_data.start_date or master_data.df.index[-1] != market_data.end_date
+    if master_data_needs_update:
         logger.debug('Computing features for backtest, overwriting global master_df')
         # the full dataframe with all candle data that we will build features on and then loop over
         master_df = market_data.df.copy()
-        logger.debug(f'Building features for {len(master_df)} rows of data')
-        # aggregate the indicator configs from all the algorithms and add them to the master_df
-        master_indicator_config  = aggregate_indicator_mappings(indicator_mappings)
-        for indicator_conf in master_indicator_config:
-            indicator = indicator_conf.make(master_df)
-            master_df = pd.concat([master_df, indicator], axis=1)
-        logger.info(f'Built following indicators: {[config.names for config in master_indicator_config]}')
-        logger.debug(f'Column names: {master_df.columns}')
+    else: master_df = master_data.df.copy()
+        
+    logger.debug(f'Building features for {len(master_df)} rows of data')
+    # aggregate the indicator configs from all the algorithms and add them to the master_df
+    master_indicator_config  = aggregate_indicator_mappings(indicator_mappings)
+    for indicator_conf in master_indicator_config:
+        if all([name in master_df.columns for name in indicator_conf.names]): continue  # skip if already in df
+        indicator = indicator_conf.make(master_df)
+        master_df = pd.concat([master_df, indicator], axis=1)
+        logger.info(f'Built indicator {indicator_conf.names}')
+    logger.debug(f'Columns list after indicators build: {master_df.columns}')
 
-        # df is the dataframe that we will loop over for the backtest. It is a subset of master_df
-        # that has had the indicators warm up and is ready to be used for the backtest
-        df = master_df.copy()
-        # drop all rows with nan values in them (this is where the indicators are warming up)
-        # for ts, row in df.iterrows():
-        #     if not row.isnull().values.any():
-        #         break
-        # df = df.loc[ts:]
-        logger.info(f'Backtest dataframe has {len(df)} rows of data. Starting at {df.index[0]} and ending at {df.index[-1]}')
-        # now set up their data objects
-        master_data = CandleData(market_data.resolution)
-        master_data.add_data(master_df, market_data.tickers, suppress_cleaning_data=True)
-        sim_data = CandleData(market_data.resolution)
-        sim_data.add_data(df, market_data.tickers, suppress_cleaning_data=True)
-    else:
-        logger.critical(f'NOT BUILDING FEATURES.... WHY THOUGH?')
+    # df is the dataframe that we will loop over for the backtest. It is a subset of master_df
+    # that has had the indicators warm up and is ready to be used for the backtest
+    df = master_df.copy()
+    # drop all rows with nan values in them (this is where the indicators are warming up)
+    # for ts, row in df.iterrows():
+    #     if not row.isnull().values.any():
+    #         break
+    # df = df.loc[ts:]
+    
+    logger.info(f'Backtest dataframe has {len(df)} rows of data. Starting at {df.index[0]} and ending at {df.index[-1]}')
+    
+    # now set up their data objects
+    master_data = CandleData(market_data.resolution)
+    master_data.add_data(master_df, market_data.tickers, suppress_cleaning_data=True)
+    sim_data = CandleData(market_data.resolution)
+    sim_data.add_data(df, market_data.tickers, suppress_cleaning_data=True)
 
 
 def set_train_test_true(fraction:float=0.8):
+    """Informs that the data should be split for training and testing, and sets the fraction of data to be used for training"""
     global train_test_split_flag
     train_test_split_flag = True
     global train_data
     global test_data
     train_data, test_data = sim_data.split(fraction)
-
-
-def optimize_backtest(
-    market_data:CandleData,
-    algorithm_configs:List[StrategyConfig],
-    slippage_model:SlippageModels=None,
-    data_split_fraction:float = 0.8,
-    verbose:bool = False,
-    plot:bool = False,
-    log_level:int = logging.WARNING) -> SimulationResultSet:
-
-    """Backtest a set of algorithms on a set of market data
-
-    Args:
-        market_data (CandleData): [description]
-        algorithm_configs (List[StrategyConfig]): [description]
-        SlippageModel (SlippageModels, optional): [description]. Defaults to None.
-        verbose (bool, optional): [description]. Defaults to False.
-        plot (bool, optional): [description]. Defaults to False.
-        log_level (int, optional): [description]. Defaults to logging.WARNING.
-
-    Returns:
-        SimulationResultSet: [description]
-    """
-
-    # check to see if different algorithms have different indicator configurations (this is an optimization)
-    indicator_mappings:List[IndicatorMapping] = [a.indicator_mapping for a in algorithm_configs]
-    # if len(set(indicator_mappings)) > 1:
-    if False:
-        print(f'detected multiple unique mappings: {indicator_mappings}')
-        compute_state_for_each_strategy = True
-    else: compute_state_for_each_strategy = False    
-
-    # build the features
-    build_features(market_data, [s.indicator_mapping for s in algorithm_configs])
-
-    # split the data
-    train_data, test_data = market_data.split(data_split_fraction)
-
-    # do your fancy training here
-
-    # now test
-
-
-    run_simulation_on_candle_data(
-        test_data, 
-        algorithm_configs, 
-        slippage_model,
-        compute_state_for_each_strategy=compute_state_for_each_strategy, 
-        verbose=verbose, 
-        plot=plot,
-        log_level=log_level)
 
 
 def backtest(
@@ -136,8 +88,9 @@ def backtest(
     slippage_model:SlippageModels=None,
     verbose:bool = False,
     plot:bool = False,
-    log_level:int = logging.WARNING) -> SimulationResultSet:
-
+    timeit:bool=False,
+    display_progress_bar:bool=True,
+    log_level:int = logging.WARNING) -> AccountHistorySet:
     """Backtest a set of algorithms on a set of market data
 
     Args:
@@ -149,27 +102,22 @@ def backtest(
         log_level (int, optional): [description]. Defaults to logging.WARNING.
 
     Returns:
-        SimulationResultSet: [description]
+        AccountHistorySet: [description]
     """
-
-    # check to see if different algorithms have different indicator configurations (this is an optimization)
-    indicator_mappings:List[IndicatorMapping] = [a.indicator_mapping for a in algorithm_configs]
-    # if len(set(indicator_mappings)) > 1:
-    if False:
-        print(f'detected multiple unique mappings: {indicator_mappings}')
-        compute_state_for_each_strategy = True
-    else: compute_state_for_each_strategy = False
 
     # build the features
     build_features(market_data, [s.indicator_mapping for s in algorithm_configs])
     global train_test_split_flag
     train_test_split_flag = False
-    run_simulation_on_candle_data(
+    
+    return run_simulation_on_candle_data(
         algorithm_configs, 
         slippage_model,
-        compute_state_for_each_strategy=compute_state_for_each_strategy, 
+        compute_state_for_each_strategy=False, 
         verbose=verbose, 
         plot=plot,
+        timeit=timeit,
+        display_progress_bar=display_progress_bar,
         log_level=log_level)
 
 
@@ -180,7 +128,9 @@ def run_simulation_on_candle_data(
     compute_state_for_each_strategy:bool = True,
     verbose:bool=False,
     plot:bool=False,
-    log_level=logging.WARNING) -> SimulationResultSet:
+    timeit:bool=False,
+    display_progress_bar:bool=True,
+    log_level=logging.WARNING) -> AccountHistorySet:
 
     logger.setLevel(log_level)
 
@@ -188,17 +138,20 @@ def run_simulation_on_candle_data(
     global train_test_split_flag
     if train_test_split_flag:
         if use_test_data:
-            logger.debug(f'Using test data')
+            logger.info(f'Using test data')
             global test_data
             data = test_data
         else:
-            logger.debug(f'Using train data')
+            logger.info(f'Using train data')
             global train_data
             data = train_data
     else:
-        logger.debug(f'Using sim data')
+        logger.debug(f'Using sim data, no train test split.')
         global sim_data
         data = sim_data
+        
+    # print out the start and end dates
+    logger.info(f'Backtesting from {data.start_date} to {data.end_date}')
 
     brokerage = SimulatedStockBrokerCandleData()
 
@@ -214,7 +167,7 @@ def run_simulation_on_candle_data(
         logger.info(f'Using slippage model: {slippage_model} as dictacted by user')
         brokerage.set_slippage_model(slippage_model)
     elif data.resolution == TemporalResolution.MINUTE:
-        logger.warning(f'Using minute resolution data. Slippage model is set to NEXT_CLOSE')
+        logger.info(f'Using minute resolution data. Slippage model is set to NEXT_CLOSE')
         brokerage.set_slippage_model(SlippageModels.NEXT_CLOSE)
     else:
         logger.info(f'The slippage model has been left at the default, {brokerage.slippage_model.name}')
@@ -244,10 +197,14 @@ def run_simulation_on_candle_data(
         #     d[f'{t}_close'] = row[f'{t}_close']
         return d
 
+    if timeit: 
+        from time import monotonic
+        start_time = monotonic()
+
+    n_rows = len(data.df)
     # Loop through the price history facilitating interaction between the algorithms and the brokerage
     # backtest with itterrows took: 20.058 s, using while loop took 19.1 s holding everything else constant
-    for ts, row in data.df.iterrows():
-
+    for i, (ts, row) in enumerate(data.df.iterrows()):
         # submit orders to the brokerage and process them
         brokerage.set_prices(row)
         for acc_num in accounts.keys():
@@ -255,14 +212,15 @@ def run_simulation_on_candle_data(
             brokerage.process_orders_for_account(a)  # processes any pending orders
             a.value_history[ts] = brokerage.get_account_value(a)
 
-        # generate new ordersn
+        # generate new orders
         """This is broken out as a major efficiency upgrade for genetic algorithms where you need the same state hundreds of times for your population. Found that when state was 
         gotten for each strategy, backtesting for 1 day slowed from ~0.75 seconds to 20 seconds."""
         if compute_state_for_each_strategy:
-            for acc_num, strategy in algorithms.items():
-                logger.debug(f'Getting state for {strategy.indicator_mapping}')
-                state = get_state(strategy.indicator_mapping, row)
-                new_orders = strategy.act(account, state)
+            for acc_num in accounts.keys():
+                a, s = accounts[acc_num], algorithms[acc_num]
+                logger.debug(f'Getting state for {s.indicator_mapping}')
+                state = get_state(s.indicator_mapping, row)
+                new_orders = s.act(a, state)
                 if new_orders is not None:
                     accounts[acc_num].submit_new_orders(new_orders)
             
@@ -275,11 +233,20 @@ def run_simulation_on_candle_data(
                 if new_orders is not None:
                     accounts[acc_num].submit_new_orders(new_orders)
 
+        if logger.getEffectiveLevel() > 20 and display_progress_bar and i%10 == 0: 
+            printProgressBar(i, n_rows)
         brokerage.clean_up()
-
-    results:SimulationResultSet = []
+    
+    print("\n")
+    # analyze simulation time
+    if timeit:
+        t = monotonic() - start_time
+        logger.info(f'Simulation took {t:.2f} seconds')
+        
+    # catalog the outputs from the simulation
+    results:AccountHistorySet = []
     for account, strategy in zip(accounts.values(), algorithms.values()):
-        res = SimulationResult(strategy, account, data.start, data.end, data.tickers, data.resolution)
+        res = AccountHistory(strategy, account, data.start_date, data.end_date, data.tickers, data.resolution)
         results.append(res)
     
     if verbose or plot:
@@ -287,29 +254,32 @@ def run_simulation_on_candle_data(
         if len(results) > 1:
             best_strategy, best_account = get_best_strategy_and_account(results)
             print(F'Printing stats for the best performing strategy only: {best_strategy}')
-        else: 
+        else:
             best_strategy = results[0].strategy
             best_account = results[0].account
 
     df = data.df
 
     if verbose:
-        print_account_general_stats(best_account, data)
+        print_account_stats(best_account, data)
     if plot:
-        dt = data.end - data.start
+        
+        # dt = data.end_date - data.start_date
         # if dt.days > 365:
         #     use_datetimes = True
         # else:
         #     use_datetimes = False
         use_datetimes = False
+        
         # if 1:
         #     # create the nested indicators the strategy to provide insights in plotting
         #     for indicator_conf in best_strategy.indicator_mapping:
         #         if type(indicator_conf.target) == IndicatorConfig and all([n not in df.columns for n in indicator_conf.target.names]):
         #             s = indicator_conf.target.make(df)
         #             df = pd.concat([df, s], axis=1)
+        
         plot_backtest_results(df, best_account, data.tickers, use_datetimes=use_datetimes, strategy_name=type(best_strategy).__name__)
-        plot_underwater(best_account, use_datetimes=use_datetimes)
+        # plot_underwater(best_account, use_datetimes=use_datetimes)
         plot_cumulative_returns(best_account, df, use_datetimes=use_datetimes)
         
         visual_analysis_of_trades(best_account, df)

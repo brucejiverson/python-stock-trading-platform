@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import logging
 from typing import Dict, Any, Tuple, List
 from dataclasses import dataclass, field
@@ -7,9 +6,10 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 from enum import Enum
+from parallelized_algorithmic_trader.util import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class IndicatorConstructionType(Enum):
@@ -278,6 +278,18 @@ def PRICE_HISTORY(df: pd.DataFrame, ticker:str, *mask) -> pd.DataFrame:
             price_history[f'price_history_{i}'] = df[ticker+'_close'].shift(i)
     return price_history
     
+
+def TIMEOFDAY(df:pd.DataFrame, _) -> pd.Series:
+    """The hour of the day"""
+    logger.debug(f'Adding feature for the hour of the day called TIMEOFDAYm    ')
+    
+    # hr = pd.Series([i.hour for i in df.index])
+    hr = df[_]
+    for i in range(len(hr)):
+        hr.iloc[i] = df.index[i].hour + df.index[i].minute/60
+    
+    return hr
+
 
 IndicatorMapping = Tuple[IndicatorConfig] 
 """Defines the structure of the state. Each element of the tuple is a DataStreamAddress. When state gets built it will be a 1D vector of the data from each address. The order of the vector is the same as the order of the tuple"""

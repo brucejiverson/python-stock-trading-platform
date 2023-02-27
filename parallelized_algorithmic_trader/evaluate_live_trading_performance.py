@@ -2,23 +2,22 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from beasttrader.performance_analysis import print_account_general_stats, get_vwr, get_best_strategy_and_account
-from beasttrader.visualizations import plot_trade_profit_hist, plot_backtest_results, plot_cumulative_returns, plot_underwater
-from beasttrader.indicators import IndicatorConfig, IndicatorMapping
+from parallelized_algorithmic_trader.performance_analysis import print_account_stats, get_vwr, get_best_strategy_and_account
+from parallelized_algorithmic_trader.visualizations import plot_trade_profit_hist, plot_backtest_results, plot_cumulative_returns, plot_underwater
+from parallelized_algorithmic_trader.indicators import IndicatorConfig, IndicatorMapping
 
 
 
 if __name__ == '__main__':
     
     # open the exchange and get the order history
-    
 
     if verbose or plot:
         # find the best performing agent
         best_strategy = results[0].strategy
         account_history = results[0].account
 
-    print_account_general_stats(account_history, market_data)
+    print_account_stats(account_history, market_data)
     vwr = get_vwr(account_history, market_data.resolution)
     print('VWR: {:.2f}'.format(vwr))
     if 1:

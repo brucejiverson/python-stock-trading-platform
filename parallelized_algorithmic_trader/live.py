@@ -1,4 +1,4 @@
-from __future__ import annotations
+
 from time import monotonic
 from typing import List, Dict
 import logging
@@ -8,7 +8,7 @@ import traceback
 import time
 
 from beasttrader.market_data import CandleData, TemporalResolution
-from beasttrader.my_td_ameritrade import td_ameritrade_exchange as td
+from beasttrader.my_td_ameritrade import td_ameritrade_brokerage as td
 from beasttrader.indicators import IndicatorConfig, IndicatorMapping, aggregate_indicator_mappings
 from beasttrader.strategy import StrategySet, StrategyConfig
 from beasttrader.backtest_tools import *

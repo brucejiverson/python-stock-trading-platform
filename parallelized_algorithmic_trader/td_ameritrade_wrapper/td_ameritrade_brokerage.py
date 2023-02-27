@@ -1,15 +1,21 @@
-from __future__ import annotations
+
 from typing import List
 from dataclasses import dataclass, field, asdict
-from td.client import TDClient
+from td.client import TDClient, VALID_CHART_VALUES
 import pandas as pd
-import json 
+import os
+
+from parallelized_algorithmic_trader.market_data import TemporalResolution, CandleData
+from parallelized_algorithmic_trader.broker import RealBrokerage
+from parallelized_algorithmic_trader.orders import *
 
 
-from .config.config import CONSUMER_KEY, CREDENTIALS_PATH, REDIRECT_URI, ACCOUNT_NUMBER_PATH
-from ..market_data import TemporalResolution, CandleData
-from ..exchange import LiveExchange
-from ..orders import *
+CONSUMER_KEY = os.environ['TDAMERITRADE_CONSUMER_KEY']
+REDIRECT_URI = os.environ['TDAMERITRADE_REDIRECT_URI']
+
+
+CREDENTIALS_PATH = os.path.join('./','parallelized_algorithmic_trader/td_ameritrade_wrapper/config/credentials.json')
+ACCOUNT_NUMBER_PATH = os.path.join('./','parallelized_algorithmic_trader/td_ameritrade_wrapper/config/account_number.json')
 
 
 @dataclass
@@ -47,11 +53,10 @@ class PriceHistoryConfig:
         daily: 1*
         weekly: 1*
         monthly: 1*"""
-    # start_date:
-    # end_date:
 
-    def get_resolution_from_frequency_type(self) -> TemporalResolution:
+    def get_resolution_from_period(self) -> TemporalResolution:
         """Convert the period and frequency to a backtrader TemporalResolution"""
+        return TemporalResolution[self.frequency_type.upper()]
         if self.frequency_type == 'minute':
             return TemporalResolution.MINUTE
         elif self.frequency_type == 'hour':
@@ -67,22 +72,28 @@ class PriceHistoryConfig:
             raise ValueError(f'Invalid period type: {self.period_type}')
 
     @classmethod
-    def convert_resolution_to_frequency_type(cls, resolution:TemporalResolution):
+    def convert_resolution_to_period(cls, resolution:TemporalResolution):
+        """Convert the backtrader TemporalResolution to a period and frequency"""
+        return resolution.value.lower()
+
+    @classmethod
+    def convert_resolution_to_frequency(cls, resolution:TemporalResolution):
         """Convert the backtrader TemporalResolution to a period and frequency"""
         if resolution == TemporalResolution.MINUTE:
             return 'minute'
         elif resolution == TemporalResolution.HOUR:
-            return 'hour'
+            raise ValueError("TDAmeritrade doesn't support hourly data for frequency.")
         elif resolution == TemporalResolution.DAY:
-            return 'day'
+            return 'daily'
         elif resolution == TemporalResolution.MONTH:
-            return 'month'
+            return 'monthly'
         else:
             raise ValueError(f'Invalid resolution: {resolution}')
 
 
-class TDAmeritradeBroker(LiveExchange):
+class TDAmeritradeBroker(RealBrokerage):
     """A wrapper for the TDAmeritrade API matching the module standards for representing exchanges."""
+    
     def __init__(self, resolution:TemporalResolution, tickers:List[str]=[]):
 
         super().__init__('TDAmeritrade')
@@ -90,16 +101,17 @@ class TDAmeritradeBroker(LiveExchange):
         self.add_ticker(tickers)
         # connect to the TDAmeritrade API
         self.set_expected_resolution(resolution)
-        self._session:TDClient = self._get_connection()
+        self.connect()
         self.logger.info('TDAmeritrade broker initialized')
-        self._account_number:str = self._get_account_number()
+        self._account_number:str = os.environ["TDAMERITRADE_ACCOUNTNUMBER"]
 
     def connect(self):
-        self._session:TDClient = self._get_connection()
+        """Connect to the TDAmeritrade API"""
 
-    def _get_connection(self) -> TDClient:
-        """Get a TDClient object that can be used to make requests to the TD Ameritrade API"""
+        # Get a TDClient object that can be used to make requests to the TD Ameritrade API
+        
         # Create a new session, credentials path is required.
+        self.logger.debug(f'Connecting to TDAmeritrade API. ')
         TDSession = TDClient(
             # client_id='brucejiverson',
             client_id=CONSUMER_KEY,
@@ -109,15 +121,7 @@ class TDAmeritradeBroker(LiveExchange):
 
         # Login to the session
         TDSession.login()
-        return TDSession
-
-    def _get_account_number(self) -> str:
-        """Get the account number from the json file"""
-        # load the account number from the json file
-        with open(ACCOUNT_NUMBER_PATH, 'r') as f:
-            account_number = str(json.load(f)['account_number'])
-            self.logger.debug(f'Loaded account number: {account_number}')
-            return account_number
+        self._session:TDClient = TDSession
 
     def get_candle_data(self, config:PriceHistoryConfig) -> CandleData:
         """CandleList:
@@ -141,8 +145,18 @@ class TDAmeritradeBroker(LiveExchange):
             {'open': 414.73, 'high': 414.82, 'low': 414.73, 'close': 414.8, 'volume': 2104, 'datetime': 1654513260000}, 
             {'open': 414.75, 'high': 414.77, 'low': 414.75, 'close': 414.77, 'volume': 700, 'datetime': 1654513320000}...
         """
-        self.logger.debug(f'Getting candle data for {config.symbol}')
-        raw_candles = self._session.get_price_history(**asdict(config))
+        self.logger.info(f'Getting candle data for {config.symbol}')
+        self.logger.debug(f'Config: {asdict(config)}')
+        
+        try:
+            raw_candles = self._session.get_price_history(**asdict(config))
+        except Exception as e:
+            self.logger.error(f'Failed to get candle data for {config.symbol}. Likely issue with period and frequency. Valid: {VALID_CHART_VALUES}')
+            raise e
+        
+        if raw_candles is None or len(raw_candles) == 0:
+            self.logger.debug(raw_candles)
+            raise ValueError('DataFrame is empty or None. Some invalid parameter must have been given or issue wit TD account configuration.')
         candles = pd.DataFrame(raw_candles['candles'])
         candles['datetime'] = pd.to_datetime(candles['datetime'], unit='ms')
         # rename the datetime column to timestamp
@@ -156,21 +170,30 @@ class TDAmeritradeBroker(LiveExchange):
             
         candles.rename(columns=new_col_names, inplace=True)
         candles.set_index(['timestamp'], drop=True, inplace=True)
-        data = CandleData(config.get_resolution_from_frequency_type())
-        data.add_data(candles, [config.symbol])
+        data = CandleData(config.get_resolution_from_period(), "TDAmeritrade")
+        data.add_data(candles, config.symbol)
         self.logger.debug(f'Successfully retrieved candle data for {config.symbol}')
-        return data
+        return data 
 
     def get_recent_price_history(self, n_periods=10) -> CandleData:
+        """Gets candle data for the recent past.
+        
+        :param n_periods: The number of periods to get data for.
+        """
+        
         price_history_config = PriceHistoryConfig(
             symbol=list(self._tickers)[0],
-            frequency_type=PriceHistoryConfig.convert_resolution_to_frequency_type(self._expected_resolution),
+            frequency_type=PriceHistoryConfig.convert_resolution_to_frequency(self._expected_resolution),
             period=n_periods
             )
         return self.get_candle_data(price_history_config)
 
     def submit_order(self, order:OrderBase):
-        """Submits an order to the TDAmeritrade API"""
+        """Submits an order to the TDAmeritrade API
+        
+        :param order: The order to submit.
+        """
+        
         otype = type(order).__name__.replace('Order', '').upper()
 
         """
@@ -253,10 +276,6 @@ class TDAmeritradeBroker(LiveExchange):
         #     fields=Account.Fields.POSITIONS,
         # ).json()
         pass
-
-
-
-
 
 
 

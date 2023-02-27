@@ -4,10 +4,13 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-from beasttrader.indicators import IndicatorMapping, NumericalIndicatorSpaces
-from beasttrader.exchange import Account, OrderSet, OrderSide
-from beasttrader.market_data import CandleData, TemporalResolution
-from beasttrader.performance_analysis import TradeSet, compile_order_history_into_trades
+from parallelized_algorithmic_trader.indicators import IndicatorMapping, NumericalIndicatorSpaces
+from parallelized_algorithmic_trader.broker import Account, OrderSet, OrderSide
+from parallelized_algorithmic_trader.market_data import CandleData, TemporalResolution
+from parallelized_algorithmic_trader.performance_analysis import TradeSet, parse_order_history_into_trades
+from parallelized_algorithmic_trader.util import get_logger
+
+logger = get_logger(__name__)
 
 
 def plot_backtest_results_mpf(candle_datas:List[CandleData], account:Account):
@@ -48,7 +51,7 @@ def plot_backtest_results_mpf(candle_datas:List[CandleData], account:Account):
     # plot the account value over time
     ax2.plot(account.value_history.keys(), account.value_history.values(), label='account value', color='black')
     ax2.title.set_text(f'Account Value Over Time')
-    fig.suptitle(f'BeastTrader Backtest Results', fontsize=14, fontweight='bold')
+    fig.suptitle(f'parallelized_algorithmic_trader Backtest Results', fontsize=14, fontweight='bold')
     fig.autofmt_xdate()
 
 
@@ -182,7 +185,7 @@ def plot_backtest_results(feature_df:pd.DataFrame, account:Account=None, tickers
         ax2.title.set_text(f'Account Value Over Time')
         ax2.set_ylabel('Account Value (USD)')
     
-    fig.suptitle(f'BeastTrader Backtest Results {strategy_name.upper()}', fontsize=14, fontweight='bold')
+    fig.suptitle(f'parallelized_algorithmic_trader Backtest Results {strategy_name.upper()}', fontsize=14, fontweight='bold')
     fig.autofmt_xdate()
 
 
@@ -252,13 +255,13 @@ def plot_cumulative_returns(account:Account, underlying:Optional[pd.DataFrame]=N
 
 def visual_analysis_of_trades(account:Account, price_history:pd.DataFrame):
     plot_trade_durations_vs_profits(account)
-    plot_trade_profit_hist(account)
-    plot_trade_max_theoretical_profit_hist(account, price_history)
+    # plot_trade_profit_hist(account)
+    # plot_trade_max_theoretical_profit_vs_drawdown(account, price_history)
 
     
 def plot_trade_profit_hist(account:Account) -> None:
     """Makes a histogram of the profits of the trades in an account."""
-    trades = compile_order_history_into_trades(account)
+    trades = parse_order_history_into_trades(account)
     profits = [t.get_profit_percent() for t in trades]
     if len(trades) > 10:
         fig, (ax1, ax2) = plt.subplots(2,1)
@@ -273,16 +276,14 @@ def plot_trade_profit_hist(account:Account) -> None:
         ax2.set_title('Histogram of Trade Durations')
         ax2.set_xlabel('Duration (days)')
         ax2.set_ylabel('# trades in this duration range')
-
     else:
-        print('Not enough trades to plot a histogram of trade profits')
-        
+        logger.warning('Not enough trades to plot a histogram of trade profits')
     return profits
 
 
-def plot_trade_max_theoretical_profit_hist(account:Account, price_history:pd.DataFrame) -> None:
+def plot_trade_max_theoretical_profit_vs_drawdown(account:Account, price_history:pd.DataFrame) -> None:
     """Makes a histogram of the profits of the trades in an account."""
-    trades = compile_order_history_into_trades(account, price_history)
+    trades = parse_order_history_into_trades(account, price_history)
     theo_profits = [t.max_percent_up for t in trades]
     if len(trades) > 10:
         # scatter plot the theoretical max profits with perfect exit within the trade timeframe vs max drawdown
@@ -316,7 +317,7 @@ def plot_trade_max_theoretical_profit_hist(account:Account, price_history:pd.Dat
 
 def plot_trade_durations_vs_profits(account:Account) -> None:
     """Plots the trade durations vs the trade profits"""
-    trades = compile_order_history_into_trades(account)
+    trades = parse_order_history_into_trades(account)
     profits = [t.get_profit_percent() for t in trades]
     durations = [t.get_duration().total_seconds()/(60*60*24) for t in trades]
     fig, ax = plt.subplots(1,1)

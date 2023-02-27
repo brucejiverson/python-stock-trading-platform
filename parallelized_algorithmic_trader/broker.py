@@ -1,15 +1,19 @@
-from __future__ import annotations
-from multiprocessing.sharedctypes import Value
+from typing import Dict, Any, Set, List
 import numpy as np
 import datetime
-from typing import Dict, Any, Set, List
 from enum import Enum
 import uuid
 import pandas as pd
 
-from beasttrader.base import Base
-from beasttrader.market_data import CandleData, TemporalResolution
-from beasttrader.orders import *
+from dataclasses import dataclass
+import os
+import pickle
+
+from parallelized_algorithmic_trader.base import Base
+from parallelized_algorithmic_trader.market_data import CandleData, TemporalResolution
+from parallelized_algorithmic_trader.orders import *
+
+from parallelized_algorithmic_trader.util import maybe_make_dir, RESULTS_DIRECTORY
 
 
 class TradingHours(Enum):
@@ -18,7 +22,7 @@ class TradingHours(Enum):
     ALL_HOURS = "ALL_HOURS"
 
 
-class Exchange(Base):
+class Brokerage(Base):
     """The main type of environment. Subclasses might be real interfaces with different exchanges, or may be simulated exchanges for backtesting."""
     def __init__(self, name):
         super().__init__(name)
@@ -63,7 +67,6 @@ class Exchange(Base):
         """Returns True if the market is open for trading based on the set trading hours."""
         if self._trading_hours == TradingHours.ALL_HOURS:
             return True
-
         if ts.time() >= self._market_open_time and ts.time() <= self._market_close_time:
             return True
         else: return False
@@ -102,11 +105,17 @@ class Account(Base):
         return sum(self._equities.values()) > 0
 
     def check_for_exposure(self, ticker:str) -> bool:
-        """Returns True if the account has any exposure to the specified ticker"""
+        """Returns True if the account has any exposure to the specified ticker
+        
+        :param ticker: The ticker to check for exposure to
+        """
         return ticker in self._equities and self._equities[ticker] > 0
         
-    def set_cash(self, cash):
-        """Sets the cash balance of the account, and tracks this as the starting cash"""
+    def set_cash(self, cash:float):
+        """Sets the cash balance of the account, and tracks this as the starting cash in USD.
+        
+        :param cash: The cash balance of the account in USD
+        """
         self.cash = cash
         self.starting_cash = cash
 
@@ -119,7 +128,10 @@ class Account(Base):
         self._pending_orders = []
     
     def submit_new_orders(self, orders:List[OrderBase]):
-        """Sets the pending order to the specified order"""
+        """Sets the pending order to the specified order
+        
+        :param orders: The order to set as the pending order
+        """
         if self.has_pending_order:
             self.logger.warning(f'Already has pending order(s). Cannot accept another order until the pending order is filled or cancelled.')
             return
@@ -132,29 +144,62 @@ class Account(Base):
         return self._pending_orders
     
     def append_order_to_account_history(self, o:OrderBase):
-        """Marks the current pending order as executed"""
+        """Marks the current pending order as executed
+        
+        :param o: The order to mark as executed
+        """
         o.open = False
         self._order_history.append(o)
 
     def get_last_buy_order(self, ticker:str=None):
-        """Returns the last buy order for the specified ticker. If no ticker is specified, returns the last buy order for any ticker."""
+        """Returns the last buy order for the specified ticker. If no ticker is specified, returns the last buy order for any ticker.
+        
+        :param ticker: The ticker to get the last buy order for
+        """
         if ticker is None:
             return [o for o in self._order_history if o.side == OrderSide.BUY][-1]
         else:
             return [o for o in self._order_history if o.side == OrderSide.BUY and o.ticker == ticker][-1]
 
-    def get_current_trade_pnl_as_percent(self, current_price:float, ticker:str=None) -> float:
-        """Returns the profit/loss of the current trade in dollars"""
-        if ticker not in self._equities.keys() or self._equities[ticker] == 0:
-            return 0
-        buy_order = self.get_last_buy_order(ticker)
-        return (current_price - buy_order.execution_price) / buy_order.execution_price
-
 
 AccountSet = Dict[uuid.UUID, Account]
 
 
-class SimulatedStockBrokerCandleData(Exchange):
+@dataclass
+class AccountHistory:
+    """A class to hold the history of an account."""
+    strategy:Base       # This should be the class type that the strategy is derived from
+    account:Account
+    start:datetime.datetime
+    end:datetime.datetime
+    tickers:List[str]
+    resolution:TemporalResolution
+
+    @property
+    def final_value(self):
+        return list(self.account.value_history.values())[-1]
+
+
+AccountHistorySet = List[AccountHistory]
+
+
+def save_account_history(result:AccountHistory):
+    """Save the latest account history to file."""
+    
+    maybe_make_dir(RESULTS_DIRECTORY)
+    file_name = os.path.join(RESULTS_DIRECTORY, 'latest_result.pkl')
+    with open(file_name, 'wb') as f:
+        pickle.dump(result, f)
+
+
+def load_account_history() -> AccountHistory:
+    """Load the latest account history."""
+    file_name = os.path.join(RESULTS_DIRECTORY, 'latest_result.pkl')
+    with open(file_name, 'rb') as f:
+        return pickle.load(f)
+
+
+class SimulatedStockBrokerCandleData(Brokerage):
     """This class is used to simulate an exchange. It is used for backtesting and for training Strategys."""
     def __init__(self, log_level=None):
         super().__init__(__name__ + '.' + self.__class__.__name__)
@@ -170,21 +215,34 @@ class SimulatedStockBrokerCandleData(Exchange):
         self.logger.info(f'Initialized with spread: {self.spread_percent}, commission: {self.commission_percent}, slippage: {self.slippage_model.name}')
 
     def set_spread(self, spread:float):
-        """Sets the spread (difference between bid and ask) of the exchange. Value should be a percentage"""
+        """Sets the spread (difference between bid and ask) of the exchange. Value should be a percentage
+        
+        :param spread: The spread of the exchange as a percentage
+        """
         self.spread_percent = spread
         self.logger.debug(f'Spread set to {spread}')
     
-    def set_commission(self, commission):
+    def set_commission(self, commission:float):
+        """Sets the commission of the exchange. Value should be a percentage.
+        
+        :param commission: The commission of the exchange as a percentage
+        """
         self.commission_percent = commission
         self.logger.debug(f'Commission set to {commission}')
     
     def set_slippage_model(self, model:SlippageModels):
-        """Sets the slippage of the exchange. Value should be a percentage"""
+        """Sets the slippage of the exchange. Value should be a percentage
+        
+        :param model: The slippage model to use
+        """
         self.slippage = model
         self.logger.debug(f'Slippage set to {model.name}, which means {model.value}')
 
     def get_account_value(self, account:Account) -> float:
-        """Returns the current value of the account in USD"""
+        """Returns the current value of the account in USD
+        
+        :param account: The account to get the value of
+        """
         value = account.cash
         for ticker, quantity in account._equities.items():
             value += quantity * self._current_price_information[ticker+'_close']
@@ -193,7 +251,6 @@ class SimulatedStockBrokerCandleData(Exchange):
     def reset(self):
         """Resets the market to its initial state, clearing all orders and price data"""
 
-        # for a in self._accounts.values(): a.reset()
         self._tickers = set()
         self._execution_prices_by_instrument = {}
 
@@ -209,11 +266,17 @@ class SimulatedStockBrokerCandleData(Exchange):
     ######## Methods for order flow  ##########################
     ###########################################################
     def set_prices(self, current_price_info:pd.Series):
-        """Sets the current price information for the simulation. This should be called once per tick."""
+        """Sets the current price information for the simulation. This should be called once per tick.
+        
+        :param current_price_info: A pandas series containing the current price information for the simulation
+        """
         self._current_price_information = current_price_info
         
     def _get_execution_price_for_order(self, order:OrderBase) -> float:
-        """Returns the execution price for an order based on the current candle, the slippage model, and the spread."""
+        """Returns the execution price for an order based on the current candle, the slippage model, and the spread.
+        
+        :param order: The order to get the execution price for
+        """
 
         # this storage attr for the execution prices gets wiped every time the exchange receives new data, so it should be none
         ticker = order.ticker
@@ -245,7 +308,12 @@ class SimulatedStockBrokerCandleData(Exchange):
         """Executes the pending trade at the current price depending on the slippage model. 
         The order of operations should be structured such that this gets called the tick after the order is placed.
         
-        Returns the executed order, or None if the order was not executed."""
+        Returns the executed order, or None if the order was not executed.
+        
+        :param account: The account to execute the order for
+        :param execution_price: The execution price for the order
+        :param order_index: The index of the order to execute
+        """
 
         commission = 0
         order = account._pending_orders.pop(order_index)
@@ -320,7 +388,10 @@ class SimulatedStockBrokerCandleData(Exchange):
         account.append_order_to_account_history(order)
 
     def process_orders_for_account(self, account:Account):
-        """Checks all pending orders for execution and executes them if some conditions are met."""
+        """Checks all pending orders for execution and executes them if some conditions are met.
+        
+        :param account: The account to process the orders for
+        """
 
         # check if this is a valid time to trade and if there is an order
         ts:pd.Timestamp = self._current_price_information.name
@@ -365,9 +436,9 @@ class SimulatedStockBrokerCandleData(Exchange):
                     self._execute_pending_order(account.account_number)
                 elif order.side == OrderSide.SELL and ex_price >= order.stop_price:
                     self._execute_pending_order(account.account_number)
-            
 
-class LiveExchange(Exchange):
+
+class RealBrokerage(Brokerage):
     def __init__(self, class_name:str, log_level=None):
         
         name = __name__ + '.' + class_name
@@ -381,3 +452,4 @@ class LiveExchange(Exchange):
         
         :param max_lookback_period_days: The maximum number of days to look back when getting historical data."""
         self._max_lookback_period = datetime.timedelta(days=max_lookback_period_days)
+        

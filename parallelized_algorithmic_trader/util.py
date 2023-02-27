@@ -1,20 +1,22 @@
-from __future__ import annotations
+
 import logging
 from typing import Optional, Mapping
 import string
 import os
 import json
-import datetime
 from typing import Dict
+
+logger = logging.getLogger('pat')
 
 
 # get the path to the installed directory
-INSTALL_PATH = os.path.dirname(os.path.realpath(__file__))
+ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
+ROOT_PATH = os.path.join(ROOT_PATH, '..')
 
-MODEL_DIRECTORY = os.path.join(INSTALL_PATH, 'models')
-DATA_DIRECTORY = os.path.join(INSTALL_PATH, 'data')
-LOG_DIRECTORY = os.path.join(INSTALL_PATH, 'logs')
-RESULTS_DIRECTORY = os.path.join(INSTALL_PATH, 'results')
+MODEL_DIRECTORY = os.path.join(ROOT_PATH, 'models')
+DATA_DIRECTORY = os.path.join(ROOT_PATH, 'data')
+LOG_DIRECTORY = os.path.join(ROOT_PATH, 'logs')
+RESULTS_DIRECTORY = os.path.join(ROOT_PATH, 'results')
 
 
 def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='█', printEnd="\r"):
@@ -43,13 +45,14 @@ def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=
 
 
 def maybe_make_dir(directory:str):
+    """Create a directory if the given path doesn't exist"""
     if not os.path.exists(directory):
         os.makedirs(directory)
         print(f'Creating a directory {directory}')
 
 
-def get_simple_logger(name: str, verbosity=logging.INFO, file=None) -> logging.Logger:
-    logger = logging.getLogger(name)
+def create_formatted_logger(name:str, verbosity:int=logging.INFO, save_to_file:bool=False) -> logging.Logger:
+    logger = get_logger(name)
 
     # Create formatters and add it to handlers, add the handles to the logger
     console_handler = logging.StreamHandler() 
@@ -60,9 +63,13 @@ def get_simple_logger(name: str, verbosity=logging.INFO, file=None) -> logging.L
     logger.addHandler(console_handler)
 
     # Create handlers. These say what to do with items as they get added to the logger
-    if file is not None:
+    if save_to_file is not None:
+        # get the folder path by eliminating the file name
+        # check if the folder exists. If not, create it
+        maybe_make_dir(LOG_DIRECTORY)
+        file_path = os.path.join(LOG_DIRECTORY, 'log')
         # Create formatters and add it to handlers, add the handles to the logger
-        file_handler = logging.FileHandler(file)
+        file_handler = logging.FileHandler(file_path)
         file_handler.setLevel(verbosity)
         file_format = logging.Formatter('%(name)s; %(levelname)s; %(message)s') # %(asctime)s; 
         file_handler.setFormatter(file_format)
@@ -71,6 +78,14 @@ def get_simple_logger(name: str, verbosity=logging.INFO, file=None) -> logging.L
     logger.setLevel(verbosity)
     logger.info(f'Initialized logger {name}')
     return logger
+
+
+def get_logger(file_name:str) -> logging.Logger:
+    """Fetches a logger by the file name updating the root name to be abbreviated"""
+    logger_name = file_name.replace("parallelized_algorithmic_trader", "pat")
+    if not "pat" in logger_name:
+        logger_name = "pat." + logger_name 
+    return logging.getLogger(logger_name)
 
 
 class ColoredConsoleFormatter(logging.Formatter):
@@ -158,18 +173,3 @@ class ColoredConsoleFormatter(logging.Formatter):
             setattr(record, name, color)
 
         return super().format(record)
-
-
-def read_config() -> Dict:
-    """Reads in the config JSON file, processes it into the proper data types, returns the dictionary"""
-
-    path = './config/config.json'
-    with open(path, 'r') as f:
-        config = json.loads(f.read())
-        return config
-
-
-def write_config(config: Dict):
-    with open('config/config.json', 'w') as f:
-        json.dump(config, f, indent=4)
-

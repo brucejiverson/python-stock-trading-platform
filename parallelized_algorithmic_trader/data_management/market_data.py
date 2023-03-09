@@ -15,6 +15,7 @@ class TemporalResolution(Enum):
     DAY = "day"
     WEEK = "week"
     MONTH = "month"
+    YEAR = "year"
 
     def get_as_minutes(self):
         if self == TemporalResolution.MINUTE:
@@ -40,50 +41,50 @@ class EquityData(Base):
         super().__init__('candle_data')
 
 
-def get_data_file_name(ticker:str, resolution:TemporalResolution) -> str:
+def build_data_file_name(ticker:str, resolution:TemporalResolution) -> str:
     """A helper function for getting the name of the file that the data for a ticker
     
     :param ticker: The ticker of the equity
     :resolution: The time per candle
     """
-    return ticker+'_'+resolution.name.lower()+'.pkl'
+    return resolution.name.lower() + '/' + ticker +'.pkl'
 
 
 class CandleData(EquityData):
     def __init__(
         self, 
+        df:pd.DataFrame,
+        tickers:List[str],
         resolution: TemporalResolution, 
         source:str
         ):
 
         super().__init__(resolution)
-        self.df:pd.DataFrame|None = None
-        self.start_date:pd.Timestamp|None = None
-        self.end_date:pd.Timestamp|None = None
-        self.source = source
+        self.df:pd.DataFrame = CandleData.vaidate_and_clean_data(df, tickers)
+        self.source:str = source
+        self.tickers:List[str] = tickers
         
-    def add_data(self, new_df:pd.DataFrame, ticker:str, suppress_cleaning_data:bool=False):
-        """Appends the given dataframe to the existing dataframe. Cleans the data.
+        # update the start and end
+        self.start_date:pd.Timestamp = self.df.index[0]
+        self.end_date:pd.Timestamp = self.df.index[-1]
         
-        :param new_df: The dataframe to append to the existing dataframe
-        :param ticker: The ticker of the equity
-        :param suppress_cleaning_data: If True, the data will not be cleaned. This is useful for testing.
+    @staticmethod
+    def vaidate_and_clean_data(df:pd.DataFrame, tickers:List[str]):
+        """This function validates and cleans the data for the given dataframe.
+        
         """
-        
-        self.logger.debug(f'Adding data for {ticker} to the existing dataframe')
-        self.logger.debug(new_df.head())
         
         # validate that the column names are named correctly
         kwards = ['open', 'high', 'low', 'close', 'volume']
-        for kw in kwards:
-            assert ticker + '_' + kw in new_df.columns, f'Column {ticker + "_" + kw} not found in new_df'
+        for tckr in tickers:
+            for kw in kwards:
+                assert tckr + '_' + kw in df.columns, f'Column {tckr + "_" + kw} not found in df'
 
-        if suppress_cleaning_data:
-            cleaned_df = new_df.copy()
+        if 0:
+            cleaned_df = df.copy()
         else:
-            cleaned_df = clean_dataframe(new_df)
-        # print(f'cleaned')
-        # print(cleaned_df.head())
+            cleaned_df = clean_dataframe(df)
+        return cleaned_df
 
         # do some basic clean up and validation of the dataframe format
         # data_resolution = self._infer_data_resolution(cleaned_df)
@@ -94,29 +95,14 @@ class CandleData(EquityData):
         # if self.resolution != data_resolution:
         #     raise ValueError (f'Given resolution {self.resolution.name} does not match the data resolution {data_resolution.name}')
         
-        if self.df is None:
-            self.df = cleaned_df
-        else:
-            self.df = pd.merge(self.df, cleaned_df, left_index=True, right_index=True, how='inner')
-        self.tickers.append(ticker)
+        # old logic for mutating the attr of this class to add more data
+        # if self.df is None:
+        #     self.df = cleaned_df
+        # else:
+        #     # df = pd.concat([df, ticker_df], axis=1)        
+        #     self.df = pd.merge(self.df, cleaned_df, left_index=True, right_index=True, how='inner')
+        # self.tickers.append(ticker)
 
-        # update the start and end
-        self.start_date = self.df.index[0]
-        self.end_date = self.df.index[-1]
-
-    def filter_data_by_date(self, start:datetime=None, end:datetime=None):
-        """This function filters the data by the given start and end dates.
-        
-        :param start: The start date
-        :param end: The end date
-        """
-        if start is not None:
-            self.df = self.df[self.df.index >= start]
-        if end is not None:
-            self.df = self.df[self.df.index <= end]
-        self.start_date = self.df.index[0]
-        self.end_date = self.df.index[-1]        
-    
     def _check_to_convert_to_resolution(spm:float, MARGIN_PERCENT:float = 10) -> TemporalResolution:
         """This function checks if the given number of samples per minute is close enough to the given resolution to be considered that resolution.
         
@@ -170,26 +156,24 @@ class CandleData(EquityData):
         """Returns two new objects split into two fractions. Returns a tuple of two FinancialData objects, (train, test)"""
         train_df, test_df = split_data_frame(self.df, fraction)
 
-        train_data = CandleData(self.resolution, self.source)
-        test_data = CandleData(self.resolution, self.source)
+        train_data = CandleData(train_df, self.tickers, self.resolution, self.source)
+        test_data = CandleData(test_df, self.tickers, self.resolution, self.source)
         
-        train_data.add_data(train_df, self.tickers)
-        test_data.add_data(test_df, self.tickers)
         return train_data, test_data
     
-    def k_fold_split(self, k:int=5) -> List[CandleData]:
-        """Returns a list of k CandleData objects split into k folds."""
-        print('\nSplitting data...')
-        data = self.df
+    # def k_fold_split(self, k:int=5) -> List[CandleData]:
+    #     """Returns a list of k CandleData objects split into k folds."""
+    #     print('\nSplitting data...')
+    #     data = self.df
 
-        folds = []
-        last_split_idx = 0
-        for i in range(k):
-            fold = CandleData(self.resolution, self.source)
-            split_idx = round( ((i+1)/k) * data.shape[0])
-            fold.add_data(data.iloc[last_split_idx::i*split_idx], self.tickers)
-            folds.append(fold)
-        return folds
+    #     folds = []
+    #     last_split_idx = 0
+    #     for i in range(k):
+    #         fold = CandleData(self.resolution, self.source)
+    #         split_idx = round( ((i+1)/k) * data.shape[0])
+    #         fold.add_data(data.iloc[last_split_idx::i*split_idx], self.tickers)
+    #         folds.append(fold)
+    #     return folds
 
 
 def split_data_frame(df:pd.DataFrame, fraction:float=0.2) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -252,3 +236,4 @@ def clean_dataframe(df:pd.DataFrame) -> pd.DataFrame:
     #         formatted_df.drop(formatted_df.index[i], inplace = True)
 
     return formatted_df
+

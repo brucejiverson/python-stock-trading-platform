@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 from parallelized_algorithmic_trader.indicators import IndicatorMapping, aggregate_indicator_mappings
 from parallelized_algorithmic_trader.strategy import StrategySet, StrategyConfig
-from parallelized_algorithmic_trader.market_data import CandleData
+from parallelized_algorithmic_trader.data_management.market_data import CandleData
 from parallelized_algorithmic_trader.broker import *
 from parallelized_algorithmic_trader.performance_analysis import print_account_stats, get_best_strategy_and_account
 from parallelized_algorithmic_trader.visualizations import plot_backtest_results, plot_cumulative_returns, visual_analysis_of_trades
@@ -22,7 +22,7 @@ sim_data:CandleData = None          # all data that is valid for use (all indica
 
 train_test_split_flag = False
 train_data:CandleData = None
-test_data:CandleData = None         # data that is used for testing
+test_data:CandleData = None
 
 
 def get_training_start_end_dates() -> Tuple[pd.Timestamp, pd.Timestamp]:
@@ -64,13 +64,13 @@ def build_features(market_data:CandleData, indicator_mappings:List[IndicatorMapp
     #         break
     # df = df.loc[ts:]
     
-    logger.info(f'Backtest dataframe has {len(df)} rows of data. Starting at {df.index[0]} and ending at {df.index[-1]}')
+    logger.debug(f'Backtest dataframe has {len(df)} rows of data. Starting at {df.index[0]} and ending at {df.index[-1]}')
     
     # now set up their data objects
-    master_data = CandleData(market_data.resolution)
-    master_data.add_data(master_df, market_data.tickers, suppress_cleaning_data=True)
-    sim_data = CandleData(market_data.resolution)
-    sim_data.add_data(df, market_data.tickers, suppress_cleaning_data=True)
+    master_data = CandleData(master_df, market_data.tickers, market_data.resolution, market_data.source)
+    # master_data.add_data(master_df, market_data.tickers, suppress_cleaning_data=True)
+    sim_data = CandleData(df, market_data.tickers, market_data.resolution, market_data.source)
+    # sim_data.add_data(df, market_data.tickers, suppress_cleaning_data=True)
 
 
 def set_train_test_true(fraction:float=0.8):
@@ -88,7 +88,7 @@ def backtest(
     slippage_model:SlippageModels=None,
     verbose:bool = False,
     plot:bool = False,
-    timeit:bool=False,
+    timeit:bool=True,
     display_progress_bar:bool=True,
     log_level:int = logging.WARNING) -> AccountHistorySet:
     """Backtest a set of algorithms on a set of market data
@@ -246,7 +246,7 @@ def run_simulation_on_candle_data(
     # catalog the outputs from the simulation
     results:AccountHistorySet = []
     for account, strategy in zip(accounts.values(), algorithms.values()):
-        res = AccountHistory(strategy, account, data.start_date, data.end_date, data.tickers, data.resolution)
+        res = AccountHistory(strategy, account, data.tickers, data.resolution)
         results.append(res)
     
     if verbose or plot:

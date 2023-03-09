@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "parallelized_algorithmic_trader"
-version = "1.0.0"
+version = "1.0.1"
 description = "A python platform for backtesting trading strategies with polygon data source and TD Ameritrade integration."
 authors = ["brucejiverson <brucejamesiverson@gmail.com>"]
 license = "MIT"
@@ -15,11 +15,11 @@ numpy = "^1.19.3"
 matplotlib = "^3.3.4"
 scipy  = "^1.6.1"
 td-ameritrade-python-api = "^0.3.5"
-sklearn = "^0.0"
 mplfinance = "^0.12.7a17"
 pandas-ta = "^0.2.45b0"
 polygon-api-client = "^1.7.1"
 hyperopt = "^0.2.7"
+lxml = "^4.9.2"
 
 # optional dependencies for examples
 [tool.poetry.extras]

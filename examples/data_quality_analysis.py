@@ -2,10 +2,11 @@ import datetime
 import logging
 
 from parallelized_algorithmic_trader.broker import TemporalResolution
-import parallelized_algorithmic_trader.polygon_io as po
+import parallelized_algorithmic_trader.data_management.polygon_io as po
+from parallelized_algorithmic_trader.util import get_logger
 
-logger = get_logger('parallelized_algorithmic_trader.neat')
-root_logger = get_logger('parallelized_algorithmic_trader')
+logger = get_logger('path.neat')
+root_logger = get_logger('path')
 root_logger.setLevel(logging.DEBUG)
 
 n_days = 365

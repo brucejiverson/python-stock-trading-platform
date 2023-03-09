@@ -10,10 +10,9 @@ import os
 import pickle
 
 from parallelized_algorithmic_trader.base import Base
-from parallelized_algorithmic_trader.market_data import CandleData, TemporalResolution
+from parallelized_algorithmic_trader.data_management.market_data import TemporalResolution
 from parallelized_algorithmic_trader.orders import *
-
-from parallelized_algorithmic_trader.util import maybe_make_dir, RESULTS_DIRECTORY
+from parallelized_algorithmic_trader.util import ACCOUNT_HISTORY_DIRECTORY
 
 
 class TradingHours(Enum):
@@ -170,8 +169,6 @@ class AccountHistory:
     """A class to hold the history of an account."""
     strategy:Base       # This should be the class type that the strategy is derived from
     account:Account
-    start:datetime.datetime
-    end:datetime.datetime
     tickers:List[str]
     resolution:TemporalResolution
 
@@ -179,24 +176,34 @@ class AccountHistory:
     def final_value(self):
         return list(self.account.value_history.values())[-1]
 
+    def save_to_file(self, result:'AccountHistory', file_name:str='latest.pkl'):
+        """Save the account history to file in binary format using the pickle module to the ./account_history directory.
+        
+        Parameters:
+        -----------
+        result: AccountHistory object to save
+        file_path: The path to save the file to
+        
+        """
+        
+        file_path = os.path.join(ACCOUNT_HISTORY_DIRECTORY, file_name)
+        print(f'Saving account history to {file_path}')
+        with open(file_path, 'wb') as f:
+            pickle.dump(result, f)
+
+    @staticmethod
+    def load_from_file(file_name:str='latest.pkl') -> 'AccountHistory':
+        """Load the specified account history from file in the ./account_history directory.
+        
+        Parameters:
+        file_name: The name of the file to load
+        """
+        file_path = os.path.join(ACCOUNT_HISTORY_DIRECTORY, file_name)
+        with open(file_path, 'rb') as f:
+            return pickle.load(f)
+
 
 AccountHistorySet = List[AccountHistory]
-
-
-def save_account_history(result:AccountHistory):
-    """Save the latest account history to file."""
-    
-    maybe_make_dir(RESULTS_DIRECTORY)
-    file_name = os.path.join(RESULTS_DIRECTORY, 'latest_result.pkl')
-    with open(file_name, 'wb') as f:
-        pickle.dump(result, f)
-
-
-def load_account_history() -> AccountHistory:
-    """Load the latest account history."""
-    file_name = os.path.join(RESULTS_DIRECTORY, 'latest_result.pkl')
-    with open(file_name, 'rb') as f:
-        return pickle.load(f)
 
 
 class SimulatedStockBrokerCandleData(Brokerage):
@@ -452,4 +459,4 @@ class RealBrokerage(Brokerage):
         
         :param max_lookback_period_days: The maximum number of days to look back when getting historical data."""
         self._max_lookback_period = datetime.timedelta(days=max_lookback_period_days)
-        
+

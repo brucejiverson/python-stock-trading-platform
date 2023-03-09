@@ -1,10 +1,10 @@
 
 import logging
-from typing import Optional, Mapping
+from typing import Optional, Mapping, NamedTuple
 import string
 import os
-import json
 from typing import Dict
+from datetime import datetime
 
 logger = logging.getLogger('pat')
 
@@ -16,7 +16,17 @@ ROOT_PATH = os.path.join(ROOT_PATH, '..')
 MODEL_DIRECTORY = os.path.join(ROOT_PATH, 'models')
 DATA_DIRECTORY = os.path.join(ROOT_PATH, 'data')
 LOG_DIRECTORY = os.path.join(ROOT_PATH, 'logs')
-RESULTS_DIRECTORY = os.path.join(ROOT_PATH, 'results')
+ACCOUNT_HISTORY_DIRECTORY = os.path.join(ROOT_PATH, 'account_history')
+
+
+# a named tuple representing a datetime range from start to end.
+class DateRange(NamedTuple):
+    """A named tuple representing a datetime range from start to end."""
+    start: datetime
+    end: datetime
+    
+    def __repr__(self) -> str:
+        return f'from {self.start} to {self.end}'
 
 
 def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='█', printEnd="\r"):
@@ -44,13 +54,6 @@ def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=
         print()
 
 
-def maybe_make_dir(directory:str):
-    """Create a directory if the given path doesn't exist"""
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-        print(f'Creating a directory {directory}')
-
-
 def create_formatted_logger(name:str, verbosity:int=logging.INFO, save_to_file:bool=False) -> logging.Logger:
     logger = get_logger(name)
 
@@ -66,7 +69,6 @@ def create_formatted_logger(name:str, verbosity:int=logging.INFO, save_to_file:b
     if save_to_file is not None:
         # get the folder path by eliminating the file name
         # check if the folder exists. If not, create it
-        maybe_make_dir(LOG_DIRECTORY)
         file_path = os.path.join(LOG_DIRECTORY, 'log')
         # Create formatters and add it to handlers, add the handles to the logger
         file_handler = logging.FileHandler(file_path)

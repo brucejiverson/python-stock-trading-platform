@@ -6,7 +6,7 @@ import pandas as pd
 
 from parallelized_algorithmic_trader.indicators import IndicatorMapping, NumericalIndicatorSpaces
 from parallelized_algorithmic_trader.broker import Account, OrderSet, OrderSide
-from parallelized_algorithmic_trader.market_data import CandleData, TemporalResolution
+from parallelized_algorithmic_trader.data_management.market_data import CandleData, TemporalResolution
 from parallelized_algorithmic_trader.performance_analysis import TradeSet, parse_order_history_into_trades
 from parallelized_algorithmic_trader.util import get_logger
 
@@ -184,8 +184,10 @@ def plot_backtest_results(feature_df:pd.DataFrame, account:Account=None, tickers
             ax2.plot(range(len(account.value_history)), account.value_history.values(), label='account value', color='black')
         ax2.title.set_text(f'Account Value Over Time')
         ax2.set_ylabel('Account Value (USD)')
-    
-    fig.suptitle(f'parallelized_algorithmic_trader Backtest Results {strategy_name.upper()}', fontsize=14, fontweight='bold')
+    ax2.tick_params(
+        bottom=False,
+        labelbottom=False)
+    fig.suptitle(f'Backtest Results for {strategy_name.upper()}', fontsize=14, fontweight='bold')
     fig.autofmt_xdate()
 
 

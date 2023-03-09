@@ -1,7 +1,7 @@
-
 import matplotlib.pyplot as plt
 import datetime
 import os
+import logging
 
 # systems from this repo
 from parallelized_algorithmic_trader.strategy import StrategyConfig
@@ -9,42 +9,47 @@ from parallelized_algorithmic_trader.backtest import backtest
 import parallelized_algorithmic_trader.indicators as indicators
 from parallelized_algorithmic_trader.indicators import IndicatorConfig, IndicatorMapping
 from parallelized_algorithmic_trader.broker import TemporalResolution
+import parallelized_algorithmic_trader.data_management.polygon_io as po
 
 # the example strategy to run
 from examples.strategies.two_ema_cross import TwoEMACross
-import parallelized_algorithmic_trader.polygon_io as po
 
 
-n_days = int(round(365/10))
+# get the root logger and set to debug
+rl = logging.getLogger('pat')
+lvl = logging.INFO
+rl.setLevel(lvl)
+
+
+ticker = 'AAPL'
 end = datetime.datetime.now()
-res = TemporalResolution.MINUTE
-start = end-datetime.timedelta(days=n_days)
-candle_data = po.get_candle_data(os.environ['POLYGON_IO'], ['SPY'], start, end, res)
+res = TemporalResolution.HOUR
+start = end-datetime.timedelta(weeks=52*1)
+candle_data = po.get_candle_data(os.environ['POLYGON_IO'], [ticker], start, end, res)
 
 
 indicator_mapping:IndicatorMapping = [
-    IndicatorConfig('SPY', indicators.EMA, args=(30,)), # fast
-    IndicatorConfig('SPY', indicators.EMA, args=(90,)), # slow
+    IndicatorConfig(ticker, indicators.EMA, args=(30,)), # fast
+    IndicatorConfig(ticker, indicators.EMA, args=(90,)), # slow
 ]
 
 config = StrategyConfig(
     indicator_mapping=indicator_mapping,
     strategy=TwoEMACross,
-    tickers=['SPY'],
-    kwargs={},
+    tickers=[ticker],
+    kwargs={'log_level': lvl},
     quantity=1
     )
 
-
-import logging
 results = backtest(
     market_data=candle_data,
     algorithm_configs=[config],
     verbose=True,
     plot=True,
-    timeit=True,
-    log_level=logging.INFO
+    log_level=lvl
     )
+
+# results[0].save_to_file('sample_for_testing.pkl')
 
 plt.show()
 

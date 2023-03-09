@@ -8,7 +8,7 @@ root_logger.setLevel(logging.DEBUG)
 
 
 ##### NOTE: THESE HIT REAL API ENDPOINTS, BE CAREFUL WITH TESTING TOO OFTEN. WILL BE UPDATED>   
-def get_candle_data():
+def test_get_candle_data():
     n_days = 10
 
     res = TemporalResolution.MINUTE
@@ -20,3 +20,16 @@ def get_candle_data():
 
     # candle_data = td_broker.get_candle_data(price_history_config)
     candle_data = td_broker.get_recent_price_history()
+    print(candle_data.df.head())
+
+
+def test_placing_orders():
+    pass
+
+
+if __name__ == "__main__":
+    test_get_candle_data()
+    test_placing_orders()
+    
+    
+    

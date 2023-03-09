@@ -5,7 +5,7 @@ from td.client import TDClient, VALID_CHART_VALUES
 import pandas as pd
 import os
 
-from parallelized_algorithmic_trader.market_data import TemporalResolution, CandleData
+from parallelized_algorithmic_trader.data_management.market_data import TemporalResolution, CandleData
 from parallelized_algorithmic_trader.broker import RealBrokerage
 from parallelized_algorithmic_trader.orders import *
 
@@ -25,7 +25,7 @@ class PriceHistoryConfig:
         period: 2
         periodType: day
         frequency: 1
-        frequencyType: min
+        frequencyType: minute
     """
     symbol:str
     period_type:str = field(default='day')          # valid are day, month, year, or ytd.
@@ -57,38 +57,33 @@ class PriceHistoryConfig:
     def get_resolution_from_period(self) -> TemporalResolution:
         """Convert the period and frequency to a backtrader TemporalResolution"""
         return TemporalResolution[self.frequency_type.upper()]
-        if self.frequency_type == 'minute':
-            return TemporalResolution.MINUTE
-        elif self.frequency_type == 'hour':
-            return TemporalResolution.HOUR
-        elif self.frequency_type == 'day':
-            return TemporalResolution.DAY
-        elif self.frequency_type == 'month':
-            return TemporalResolution.MONTH
-        elif self.frequency_type == 'year':
-            raise ValueError
-        elif self.frequency_type == 'ytd': raise ValueError
-        else:
-            raise ValueError(f'Invalid period type: {self.period_type}')
-
-    @classmethod
-    def convert_resolution_to_period(cls, resolution:TemporalResolution):
+    
+    @staticmethod
+    def convert_resolution_to_period(resolution:TemporalResolution):
         """Convert the backtrader TemporalResolution to a period and frequency"""
+        unsupported_periods = (TemporalResolution.HOUR, TemporalResolution.MINUTE, TemporalResolution.WEEK)
+        supported_periods = (TemporalResolution.DAY, TemporalResolution.MONTH, TemporalResolution.YEAR)
+        supported_strs = [p.value.lower() for p in supported_periods]
+        if resolution in unsupported_periods:
+            raise ValueError(f"TDAmeritrade doesn't support {resolution.value} data for period. Try {supported_strs}.")
         return resolution.value.lower()
-
-    @classmethod
-    def convert_resolution_to_frequency(cls, resolution:TemporalResolution):
+        
+    @staticmethod
+    def convert_resolution_to_frequency(resolution:TemporalResolution):
         """Convert the backtrader TemporalResolution to a period and frequency"""
-        if resolution == TemporalResolution.MINUTE:
+        unsupported_frequencies = (TemporalResolution.HOUR,)
+        if resolution in unsupported_frequencies:
+            raise ValueError(f"TDAmeritrade doesn't support {resolution.value} data for frequency. Try day, week, or month.")
+        elif resolution == TemporalResolution.MINUTE:
             return 'minute'
-        elif resolution == TemporalResolution.HOUR:
-            raise ValueError("TDAmeritrade doesn't support hourly data for frequency.")
         elif resolution == TemporalResolution.DAY:
             return 'daily'
+        elif resolution == TemporalResolution.WEEK:
+            return 'weekly'
         elif resolution == TemporalResolution.MONTH:
             return 'monthly'
         else:
-            raise ValueError(f'Invalid resolution: {resolution}')
+            raise ValueError(f'Unknown: {resolution}')
 
 
 class TDAmeritradeBroker(RealBrokerage):
@@ -158,6 +153,8 @@ class TDAmeritradeBroker(RealBrokerage):
             self.logger.debug(raw_candles)
             raise ValueError('DataFrame is empty or None. Some invalid parameter must have been given or issue wit TD account configuration.')
         candles = pd.DataFrame(raw_candles['candles'])
+        
+        # do some formatting 
         candles['datetime'] = pd.to_datetime(candles['datetime'], unit='ms')
         # rename the datetime column to timestamp
         new_col_names = {
@@ -167,13 +164,17 @@ class TDAmeritradeBroker(RealBrokerage):
             'high': config.symbol + '_high', 
             'low': config.symbol + '_low', 
             'volume': config.symbol + '_volume'}
-            
+        
         candles.rename(columns=new_col_names, inplace=True)
         candles.set_index(['timestamp'], drop=True, inplace=True)
-        data = CandleData(config.get_resolution_from_period(), "TDAmeritrade")
-        data.add_data(candles, config.symbol)
+        
         self.logger.debug(f'Successfully retrieved candle data for {config.symbol}')
-        return data 
+        return CandleData(
+            candles, 
+            [config.symbol], 
+            config.get_resolution_from_period(), 
+            "TDAmeritrade"
+            )
 
     def get_recent_price_history(self, n_periods=10) -> CandleData:
         """Gets candle data for the recent past.

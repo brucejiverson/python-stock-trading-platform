@@ -4,7 +4,7 @@ import datetime
 import hyperopt
 import logging
 
-import parallelized_algorithmic_trader.polygon_io as po                                                                     # data
+import parallelized_algorithmic_trader.data_management.polygon_io as po                                                                     # data
 from parallelized_algorithmic_trader.strategy import StrategyConfig                                                         # algorithm
 from parallelized_algorithmic_trader.backtest import build_features, set_train_test_true, run_simulation_on_candle_data     # simulation 
 import parallelized_algorithmic_trader.indicators as indicators                                                             # feature construction

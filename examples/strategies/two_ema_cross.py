@@ -27,7 +27,7 @@ class TwoEMACross(StrategyBase):
     def act(self, account:Account, state:Dict[str, float]) -> orders.OrderBase | None:
         # Check if an order is pending ... if yes, we cannot send a 2nd one
         if account.has_pending_order:
-            self.logger.debug(f'waiting for order to execute...')
+            # self.logger.debug(f'waiting for order to execute...')
             return None
 
         if state[self.indicator_mapping[0].names[0]] > state[self.indicator_mapping[1].names[0]]:

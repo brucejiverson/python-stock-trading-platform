@@ -13,7 +13,7 @@ from parallelized_algorithmic_trader.broker import Account, OrderSide, OrderBase
 from parallelized_algorithmic_trader.util import get_logger
 
 logger = get_logger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 @dataclass

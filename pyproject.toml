@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "parallelized_algorithmic_trader"
-version = "1.0.1"
+version = "1.0.2"
 description = "A python platform for backtesting trading strategies with polygon data source and TD Ameritrade integration."
 authors = ["brucejiverson <brucejamesiverson@gmail.com>"]
 license = "MIT"
@@ -8,6 +8,7 @@ classifiers = [
    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
 ]
+
 
 [tool.poetry.dependencies]
 python = "^3.10.0"

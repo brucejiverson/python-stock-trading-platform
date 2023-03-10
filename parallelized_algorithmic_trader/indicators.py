@@ -291,6 +291,22 @@ def TIMEOFDAY(df:pd.DataFrame, _) -> pd.Series:
     return hr
 
 
+def MEAN(df:pd.DataFrame, targets=List[str]) -> pd.DataFrame:
+    """Takes the mean of the specified features"""
+    means = df[targets].mean(axis=1)
+    return means
+
+
+def MIN_MAX_SCALER(df:pd.DataFrame, target:str, min_val:float, max_val:float) -> pd.Series:
+    """Scales the target column to be between min_val and max_val"""
+    return (df[target] - min_val)/(max_val - min_val)
+
+
+def STANDARD_SCALER(df:pd.DataFrame, target:str) -> pd.Series:
+    """Scales the target column to have a mean of 0 and a standard deviation of 1"""
+    return (df[target] - df[target].mean())/df[target].std()
+
+
 IndicatorMapping = Tuple[IndicatorConfig] 
 """Defines the structure of the state. Each element of the tuple is a DataStreamAddress. When state gets built it will be a 1D vector of the data from each address. The order of the vector is the same as the order of the tuple"""
 

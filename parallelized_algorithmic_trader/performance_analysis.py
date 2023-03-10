@@ -8,12 +8,12 @@ import logging
 import pandas as pd
 from scipy.optimize import curve_fit
 
-from parallelized_algorithmic_trader.market_data import CandleData, TemporalResolution
+from parallelized_algorithmic_trader.data_management.market_data import CandleData, TemporalResolution
 from parallelized_algorithmic_trader.broker import Account, OrderSide, OrderBase, AccountHistory, AccountHistorySet
 from parallelized_algorithmic_trader.util import get_logger
 
-logger = get_logger(__name__.replace("parallelized_algorithmic_trader", "pat"))
-logger.setLevel(logging.INFO)
+logger = get_logger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 @dataclass
@@ -64,7 +64,7 @@ def get_best_strategy_and_account(results=AccountHistorySet) -> AccountHistory:
     return best_result
 
 
-def function_for_list_if_length(list:List, func) -> Any:
+def func_for_list_if_length(list:List, func) -> Any:
     """Returns the result of the function if the list is not empty, otherwise returns 0."""
     if len(list) == 0: return 0
     return func(list)
@@ -150,19 +150,19 @@ def print_account_stats(account:Account, underlying:CandleData=None):
     # parse the buys and sells into trades and do basic analysis on them
     trades = parse_order_history_into_trades(account)
     # trade_profits = [t.get_net_profit() for t in trades]
-    # mean_profit = function_for_list_if_length(trade_profits, np.mean)
+    # mean_profit = func_for_list_if_length(trade_profits, np.mean)
     trade_profits_perc = [t.get_profit_percent() for t in trades]
-    mean_profit_percent = 100*function_for_list_if_length(trade_profits_perc, np.mean)
-    profit_std = 100*function_for_list_if_length(trade_profits_perc, np.std)
+    mean_profit_percent = 100*func_for_list_if_length(trade_profits_perc, np.mean)
+    profit_std = 100*func_for_list_if_length(trade_profits_perc, np.std)
     logger.info("Mean trade profit: {:.2f}%, stddev {:.2f}".format(mean_profit_percent, profit_std))
     
     trade_durations = [t.get_duration().total_seconds() for t in trades]
-    mean_trade_duration = function_for_list_if_length(trade_durations, np.mean)/(60*60)
-    trade_duration_std = function_for_list_if_length(trade_durations, np.std)/(60*60)
+    mean_trade_duration = func_for_list_if_length(trade_durations, np.mean)/(60*60)
+    trade_duration_std = func_for_list_if_length(trade_durations, np.std)/(60*60)
     logger.info('Mean time to exit: {:.0f} hours, stddev {:.0f}'.format(mean_trade_duration, trade_duration_std))
     
     buy_to_buy_times:List[pd.Timedelta] = [t1.buy.execution_timestamp - t2.buy.execution_timestamp for t1, t2 in zip(trades[1:], trades[:-1])]
-    mean_time_between_trades = function_for_list_if_length([t.total_seconds() for t in buy_to_buy_times], np.mean)/(60*60)
+    mean_time_between_trades = func_for_list_if_length([t.total_seconds() for t in buy_to_buy_times], np.mean)/(60*60)
     logger.info('Mean time from buy to buy: {:.0f} hours, {:.2f} days'.format(mean_time_between_trades, mean_time_between_trades/24))
     
     logger.info('Win rate: {:.1f} %'.format(get_win_percentage(trades=trades)))
@@ -219,6 +219,21 @@ def get_annualized_ROI(account:Account) -> float:
     return annualized_roi*100
 
 
+def get_expected_ROI(account:Account) -> float:
+    """Fits a curve to the account value history and returns the expected return.
+    
+    :param account: The account to calculate the expected ROI of.
+    :return: The expected ROI of the account as a percentage (ie 11 being 11%)
+    """
+    
+    value_history = list(account.value_history.values())
+    start_value = value_history[0]
+    
+    mean_return_per_timestep = fit_exponential_curve_fixed_start(value_history)
+    end_val = start_value*np.exp(mean_return_per_timestep*len(value_history))
+    return (end_val - start_value)/start_value*100
+
+
 def get_expected_annualized_ROI(account:Account) -> float:
     """Fits a curve to the account value history and returns the expected annualized return.
     
@@ -228,13 +243,11 @@ def get_expected_annualized_ROI(account:Account) -> float:
     value_history = list(account.value_history.values())
     start_value = value_history[0]
     
-    mean_return_per_timestep = fit_exponential_curve_fixed_start(value_history)
-
     end = list(account.value_history.keys())[-1]
     start = list(account.value_history.keys())[0]
     n_years = (end - start).total_seconds()/(60*60*24*365)
     
-    mean_end_val = value_history[0]*(1 + mean_return_per_timestep)**len(value_history)
+    mean_end_val = get_expected_ROI(account)
     mean_return = (mean_end_val -start_value)/start_value
     return 100*((1 + mean_return)**(1/n_years) - 1)
     
@@ -294,32 +307,35 @@ def get_vwr(account:Account, tau:float=4, stddev_max:float=0.2) -> float:
         maximum acceptable σP  (investor limit). The stddev of the difference between value and zero variance expected value
     '''
 
+    logger.debug('Calculating VWR')
     value_history = list(account.value_history.values())
     start_val, end_val = value_history[0], value_history[-1]
     
-    # mean_return_per_timestep = fit_exponential_curve_fixed_start(value_history)
     mean_return_per_timestep = (end_val/start_val)**(1/len(value_history)) - 1
 
-    start_date = list(account.value_history.keys())[0]
-    end_date = list(account.value_history.keys())[-1]
-    n_years = (end_date - start_date).total_seconds()/(60*60*24*365)
-    
-    roi = get_ROI(account)
-    
-    if roi < 0:
-        logger.debug(f'Warning: mean return is less than 0. VWR will be modified to exclude penalization of variance')
-        return roi
+    expected_end_val = start_val*(1 + mean_return_per_timestep)**len(value_history)
         
     # penalizing variance defined as account_value - mean_exponential growth
     zero_variability_returns = [start_val*np.exp(mean_return_per_timestep*i) for i in range(len(value_history))]
+    logger.debug(f'vwr expected end val: {zero_variability_returns[-1]}')
+    
     # difference between actual and zero-variability prices divided by zero-variability prices to normalize 
     log_difference = [v/v_zero_var - 1 for v, v_zero_var in zip(value_history, zero_variability_returns)]
 
-    sigma_p = np.std(log_difference)*value_history[0]
-    if sigma_p > stddev_max: return 0
+    sigma_p = np.std(log_difference)    # *value_history[0]   # multiply by the starting value as we normalized this earlier, so sigma is in dollars
+    if sigma_p > stddev_max: 
+        logger.warning(f'VWR sigma_p: {sigma_p} is greater than the max allowed: {stddev_max}. returning roi')
+        return expected_end_val/start_val - 1
     
-    vwr = roi * ((1 + sigma_p/stddev_max)**tau)
-    return vwr
+    log_return = np.log(zero_variability_returns[-1]/zero_variability_returns[0])
+    logger.debug(f'log return: {log_return}')
+
+    if mean_return_per_timestep < 0:
+        logger.debug(f'Warning: mean return is less than 0. VWR will be modified to amplify the negative return.')
+        variance_term = 1 + (sigma_p/stddev_max)**tau
+    else: 
+        variance_term = 1 - (sigma_p/stddev_max)**tau
+    return log_return * variance_term
 
 
 def get_curve_fit_vwr(account:Account, tau:float=4, stddev_max:float=0.2) -> float:
@@ -335,26 +351,35 @@ def get_curve_fit_vwr(account:Account, tau:float=4, stddev_max:float=0.2) -> flo
       - ``sdev_max`` (default: ``0.20``)
         maximum acceptable σP  (investor limit). The stddev of the difference between value and zero variance expected value
     '''
-
-    expected_annualized_roi = get_expected_annualized_ROI(account)
+    logger.debug('calculating curve fit vwr')
     
-    if expected_annualized_roi < 0:
-        logger.debug(f'Warning: mean return is less than 0. VWR will be modified to exclude penalization of variance')
-        return expected_annualized_roi
-        
+    mean_return_per_timestep = fit_exponential_curve_fixed_start(list(account.value_history.values()))
+    
     value_history = list(account.value_history.values())
     start_value = value_history[0]
-    mean_return_per_timestep = expected_annualized_roi/100
-    
     # penalizing variance defined as account_value - mean_exponential growth
     zero_variability_returns = [start_value*np.exp(mean_return_per_timestep*i) for i in range(len(value_history))]
-    # difference between actual and zero-variability prices divided by zero-variability prices to normalize
-    log_differences = [v/v_zero_var - 1 for v, v_zero_var in zip(value_history, zero_variability_returns)]
-
-    sigma_p = np.std(log_differences) * start_value
-    if sigma_p > stddev_max: return 0
+    logger.debug(f'Expected end val: {zero_variability_returns[-1]}') 
     
-    vwr = zero_variability_returns[-1] * ((1 + sigma_p/stddev_max)**tau)
+    # difference between actual and zero-variability prices divided by zero-variability prices to normalize
+    normalized_differences = [v/v_zero_var - 1 for v, v_zero_var in zip(value_history, zero_variability_returns)]
+    
+    sigma_p = np.std(normalized_differences)    # * start_value
+    if sigma_p > stddev_max: 
+        logger.warning(f'VWR sigma_p is greater than the max allowed. Returning roi')
+        return get_expected_ROI(account)
+    logger.debug(f'VWR curve fit sigma_p: {sigma_p}')
+    
+    log_return = np.log(zero_variability_returns[-1]/start_value)
+    logger.debug(f'log return: {log_return}')
+    
+    if mean_return_per_timestep < 0:
+        logger.debug(f'Warning: mean return is less than 0. VWR will be modified to amplify the negative return.')
+        variance_term = 1 + (sigma_p/stddev_max)**tau
+    else: 
+        variance_term = 1 - (sigma_p/stddev_max)**tau
+        
+    vwr = log_return * variance_term
     return vwr
 
 
@@ -374,3 +399,7 @@ def get_alpha(account:Account, underlying:CandleData, rf:float=0) -> Tuple[str, 
     alpha = roi - rf - beta*(underlying_return - rf)
     return ticker, alpha
 
+
+def get_vwr_curve_alpha(account:Account, underlying:CandleData):
+    vwr = get_curve_fit_vwr(account)
+    

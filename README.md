@@ -68,8 +68,8 @@ Ensure at this time that you have your pyproject.toml file in the root of your p
 
 Run the following commands to set up the environment and install poetry:
 ```
-pyenv install 3.10.6
-pyenv virtualenv 3.10.6 <env_name>
+pyenv install 3.x.x
+pyenv virtualenv 3.x.x <env_name>
 pyenv local <env_name>
 pip install poetry
 poetry lock

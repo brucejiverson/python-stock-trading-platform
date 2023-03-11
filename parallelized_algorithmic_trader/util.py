@@ -66,7 +66,7 @@ def create_formatted_logger(name:str, verbosity:int=logging.INFO, save_to_file:b
     logger.addHandler(console_handler)
 
     # Create handlers. These say what to do with items as they get added to the logger
-    if save_to_file is not None:
+    if save_to_file:
         # get the folder path by eliminating the file name
         # check if the folder exists. If not, create it
         file_path = os.path.join(LOG_DIRECTORY, 'log')

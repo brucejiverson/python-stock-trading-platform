@@ -1,5 +1,5 @@
 # What is this package?
-I wanted to explore genetic algorithms, a set of reinforcement learning algorithms that requires many agents to play at the same time. That is a feature that is not available in most backtesting software, and I wanted to see if I could implement it. This package is configured as the underlying backtest engine in standalone format. See my other repository genetic_algorithm_trading for NEAT and other genetic algorithm experiements.
+I wanted to explore applying genetic algorithms to securities trading, a set of reinforcement learning algorithms that requires many agents to play at the same time. That feature is not available in most backtesting software, which means to try these algorithms one would have to backtest each agent serially, something that is prohibitive in computation and time. This package is built to enable that feature of testing many algorithms in parallel. This package is configured as the underlying backtest engine in standalone format (with out any algorithms beyond basic demonstration). See my other repository genetic_algorithm_trading for NEAT and other genetic algorithm experiements.
 
 **Key features**
 - Test multiple strategies at the same time

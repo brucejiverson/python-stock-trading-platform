@@ -32,32 +32,35 @@ def get_training_start_end_dates() -> Tuple[pd.Timestamp, pd.Timestamp]:
         return sim_data.start_date, sim_data.end_date
 
 
-def build_features(market_data:CandleData, indicator_mappings:List[IndicatorMapping]):
+def build_features(candle_data:CandleData, indicator_mappings:List[IndicatorMapping]) -> CandleData:
     """Builds the features for the backtest. This is a global function so that we can make it once and then resuse it when doing consecutive backtests"""
     # this is done to prevent calculation of the features for consecutive backtests (can be somewhat time consuming)
     global master_data
     global sim_data
     
-    master_data_needs_update = master_data is None or master_data.df.index[0] != market_data.start_date or master_data.df.index[-1] != market_data.end_date
+    master_data_needs_update = master_data is None or master_data.df.index[0] != candle_data.start_date or master_data.df.index[-1] != candle_data.end_date
     if master_data_needs_update:
         logger.debug('Computing features for backtest, overwriting global master_df')
         # the full dataframe with all candle data that we will build features on and then loop over
-        master_df = market_data.df.copy()
+        master_df = candle_data.df.copy()
     else: master_df = master_data.df.copy()
         
     logger.debug(f'Building features for {len(master_df)} rows of data')
     # aggregate the indicator configs from all the algorithms and add them to the master_df
     master_indicator_config  = aggregate_indicator_mappings(indicator_mappings)
     for indicator_conf in master_indicator_config:
-        if all([name in master_df.columns for name in indicator_conf.names]): continue  # skip if already in df
+        if all([name in master_df.columns for name in indicator_conf.names]): 
+            logger.warning(f'Skipping indicator {indicator_conf.names} because it is already in the dataframe')
+            continue  # skip if already in df
         indicator = indicator_conf.make(master_df)
         master_df = pd.concat([master_df, indicator], axis=1)
         logger.info(f'Built indicator {indicator_conf.names}')
     logger.debug(f'Columns list after indicators build: {master_df.columns}')
 
-    # df is the dataframe that we will loop over for the backtest. It is a subset of master_df
+    # df is the (global var) dataframe that we will loop over for the backtest. It is a subset of master_df
     # that has had the indicators warm up and is ready to be used for the backtest
     df = master_df.copy()
+    
     # drop all rows with nan values in them (this is where the indicators are warming up)
     # for ts, row in df.iterrows():
     #     if not row.isnull().values.any():
@@ -67,11 +70,9 @@ def build_features(market_data:CandleData, indicator_mappings:List[IndicatorMapp
     logger.debug(f'Backtest dataframe has {len(df)} rows of data. Starting at {df.index[0]} and ending at {df.index[-1]}')
     
     # now set up their data objects
-    master_data = CandleData(master_df, market_data.tickers, market_data.resolution, market_data.source)
-    # master_data.add_data(master_df, market_data.tickers, suppress_cleaning_data=True)
-    sim_data = CandleData(df, market_data.tickers, market_data.resolution, market_data.source)
-    # sim_data.add_data(df, market_data.tickers, suppress_cleaning_data=True)
-
+    master_data = CandleData(master_df, candle_data.tickers, candle_data.resolution)
+    sim_data = CandleData(df, candle_data.tickers, candle_data.resolution)
+    return sim_data
 
 def set_train_test_true(fraction:float=0.8):
     """Informs that the data should be split for training and testing, and sets the fraction of data to be used for training"""
@@ -85,24 +86,24 @@ def set_train_test_true(fraction:float=0.8):
 def backtest(
     market_data:CandleData,
     algorithm_configs:List[StrategyConfig],
-    slippage_model:SlippageModels=None,
+    slippage_model:SlippageModelsMarketOrders=None,
     verbose:bool = False,
     plot:bool = False,
     timeit:bool=True,
     display_progress_bar:bool=True,
-    log_level:int = logging.WARNING) -> AccountHistorySet:
+    log_level:int = logging.WARNING) -> AccountHistoryFileHandlerSet:
     """Backtest a set of algorithms on a set of market data
 
     Args:
         market_data (CandleData): [description]
         algorithm_configs (List[StrategyConfig]): [description]
-        SlippageModel (SlippageModels, optional): [description]. Defaults to None.
+        SlippageModel (SlippageModelsMarketOrders, optional): [description]. Defaults to None.
         verbose (bool, optional): [description]. Defaults to False.
         plot (bool, optional): [description]. Defaults to False.
         log_level (int, optional): [description]. Defaults to logging.WARNING.
 
     Returns:
-        AccountHistorySet: [description]
+        AccountHistoryFileHandlerSet: [description]
     """
 
     # build the features
@@ -123,14 +124,15 @@ def backtest(
 
 def run_simulation_on_candle_data(
     algorithm_configs:List[StrategyConfig],
-    slippage_model:SlippageModels|None=None,
+    slippage_model:SlippageModelsMarketOrders|None=None,
     use_test_data:bool = False,
     compute_state_for_each_strategy:bool = True,
     verbose:bool=False,
     plot:bool=False,
+    folder_to_save_plots:str|None=None,
     timeit:bool=False,
     display_progress_bar:bool=True,
-    log_level=logging.WARNING) -> AccountHistorySet:
+    log_level=logging.WARNING) -> AccountHistoryFileHandlerSet:
 
     logger.setLevel(log_level)
 
@@ -168,20 +170,20 @@ def run_simulation_on_candle_data(
         brokerage.set_slippage_model(slippage_model)
     elif data.resolution == TemporalResolution.MINUTE:
         logger.info(f'Using minute resolution data. Slippage model is set to NEXT_CLOSE')
-        brokerage.set_slippage_model(SlippageModels.NEXT_CLOSE)
+        brokerage.set_slippage_model(SlippageModelsMarketOrders.NEXT_CLOSE)
     else:
-        logger.info(f'The slippage model has been left at the default, {brokerage.slippage_model.name}')
+        logger.info(f'The slippage model has been left at the default, {brokerage.market_order_slippage_model.name}')
 
     # set up the algorithms
     algorithms:StrategySet = {}
-    accounts:Dict[uuid.UUID, Account] = {}
+    accounts:Dict[uuid.UUID, SimulatedAccount] = {}
     # Instantiates a strategy to the brain and adds a matching account to the brokerage
     for algo_config in algorithm_configs:
         for _ in range(algo_config.quantity):
             account_num = uuid.uuid4()
             algorithms[account_num] = algo_config.instantiate(account_num)
 
-            a = Account(account_num, 10000)
+            a = SimulatedAccount(account_num, 10000)
             logger.debug(f'Created account {str(account_num)[:8]} with ${a.cash:.2f}')
             accounts[account_num] = a
 
@@ -225,8 +227,10 @@ def run_simulation_on_candle_data(
                     accounts[acc_num].submit_new_orders(new_orders)
             
         else:   # get the mapping once from the first strategy is the set and use it for all the others
-            logger.debug(f'Getting state for {list(algorithms.values())[0].indicator_mapping}')
-            state = get_state(list(algorithms.values())[0].indicator_mapping, row)
+            indicator_configs_needed_by_algo = list(algorithms.values())[0].indicator_mapping
+            logger.debug(f'Getting state for {[config.names for config in indicator_configs_needed_by_algo]}')
+            state = get_state(indicator_configs_needed_by_algo, row)
+            
             for acc_num in algorithms.keys():
                 account, strategy = accounts[acc_num], algorithms[acc_num]
                 new_orders = strategy.act(account, state)
@@ -244,9 +248,9 @@ def run_simulation_on_candle_data(
         logger.info(f'Simulation took {t:.2f} seconds')
         
     # catalog the outputs from the simulation
-    results:AccountHistorySet = []
+    results:AccountHistoryFileHandlerSet = []
     for account, strategy in zip(accounts.values(), algorithms.values()):
-        res = AccountHistory(strategy, account, data.tickers, data.resolution)
+        res = AccountHistoryFileHandler(strategy, account, data.tickers, data.resolution)
         results.append(res)
     
     if verbose or plot:
@@ -278,11 +282,17 @@ def run_simulation_on_candle_data(
         #             s = indicator_conf.target.make(df)
         #             df = pd.concat([df, s], axis=1)
         
-        plot_backtest_results(df, best_account, data.tickers, use_datetimes=use_datetimes, strategy_name=type(best_strategy).__name__)
+        plot_backtest_results(
+            df, 
+            best_account, 
+            data.tickers, 
+            use_datetimes=use_datetimes, 
+            strategy_name=type(best_strategy).__name__,
+            save_folder=folder_to_save_plots
+            )
         # plot_underwater(best_account, use_datetimes=use_datetimes)
-        plot_cumulative_returns(best_account, df, use_datetimes=use_datetimes)
-        
-        visual_analysis_of_trades(best_account, df)
+        plot_cumulative_returns(best_account, df, use_datetimes=use_datetimes, save_folder=folder_to_save_plots)
+        visual_analysis_of_trades(best_account, df, save_folder=folder_to_save_plots)
         plt.show()
     
     return results

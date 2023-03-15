@@ -1,64 +1,24 @@
-from typing import Any, List, Tuple
-import random
-from dataclasses import dataclass
-import datetime
-from typing import List, Dict
+from typing import Any, List, Tuple, Collection, Callable
+from typing import List
 import numpy as np
 import logging
 import pandas as pd
 from scipy.optimize import curve_fit
 
-from parallelized_algorithmic_trader.data_management.market_data import CandleData, TemporalResolution
-from parallelized_algorithmic_trader.broker import Account, OrderSide, OrderBase, AccountHistory, AccountHistorySet
+from parallelized_algorithmic_trader.data_management.market_data import CandleData
+from parallelized_algorithmic_trader.broker import SimulatedAccount, OrderSide, AccountHistoryFileHandler, AccountHistoryFileHandlerSet
 from parallelized_algorithmic_trader.util import get_logger
 
 logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
 
 
-@dataclass
-class Trade:
-    """Holds all the information defining a trade, and provides some utility functions for analyzing performance."""
-    buy:OrderBase
-    sell:OrderBase
-    max_draw_down:float|None = None
-    max_percent_up:float|None = None
-
-    @property
-    def ticker(self) -> str:
-        return self.buy.ticker
-
-    def get_net_profit(self) -> float:
-        """Returns the net profit of the trade, calculated as the difference between the buy and sell value.
-        
-        :return: float representing the net profit of the trade.
-        """
-        return self.sell.get_transaction_value() - self.buy.get_transaction_value()
-    
-    def get_profit_percent(self) -> float:
-        """Returns the profit of the trade as a percentage gain or loss.
-        
-        :return: float representing the percentage gain or loss of the trade.
-        """
-        return (self.sell.execution_price - self.buy.execution_price) / self.buy.execution_price
-
-    def get_duration(self) -> datetime.timedelta:
-        """Returns the duration of the trade.
-        
-        :return: datetime.timedelta object representing the duration of the trade.
-        """
-        return self.sell.execution_timestamp - self.buy.execution_timestamp
-
-
-TradeSet = List[Trade]      # the ticker mapped to a list of trades
-
-
-def get_best_strategy_and_account(results=AccountHistorySet) -> AccountHistory:
+def get_best_strategy_and_account(results=AccountHistoryFileHandlerSet) -> AccountHistoryFileHandler:
     """find the account with the best performance. Note that this assumes that all accounts have cashed out."""
     highest_value = 0
     best_result = None
     for r in results:
-        if AccountHistory.final_value > highest_value:
+        if AccountHistoryFileHandler.final_value > highest_value:
             highest_value = r.final_value
             best_result = r
     return best_result
@@ -70,61 +30,7 @@ def func_for_list_if_length(list:List, func) -> Any:
     return func(list)
 
 
-def parse_order_history_into_trades(account:Account, price_history:pd.DataFrame|None=None) -> TradeSet:
-    """Compiles the order history of an account into a list of trades.
-    
-    :param account: The account to parse the order history of.
-    :param price_history: The price history of the account. If this is not None, then the max drawdown and max percent up
-    :return: A list of trades.
-    """
-    
-    trades:TradeSet = []
-    organized_orders:Dict[str, Dict[str, List[OrderBase]]] = {}
-    for o in account._order_history:
-        if o.ticker not in organized_orders:
-            organized_orders[o.ticker] = {'buys':[], 'sells':[]}
-        if o.side == OrderSide.BUY:
-            organized_orders[o.ticker]['buys'].append(o)
-        else:   
-            organized_orders[o.ticker]['sells'].append(o)
-
-    for ticker in organized_orders.keys():
-        organized_orders[ticker]['buys'].sort(key=lambda o: o.execution_timestamp)
-        organized_orders[ticker]['sells'].sort(key=lambda o: o.execution_timestamp)
-
-        for i in range(len(organized_orders[ticker]['sells'])):
-            trades.append(Trade(organized_orders[ticker]['buys'][i], organized_orders[ticker]['sells'][i]))
-
-    # parse out the max drawdown and max percent up for each trade
-    trade_index = 0
-    flag = False
-    max_draw_down = 0
-    max_percent_up = 0
-
-    if price_history is not None:
-        for ts, row in price_history.iterrows():
-            if trade_index >= len(trades):
-                break
-            trade = trades[trade_index]
-            # monitor if we are in a trade
-            if not flag and ts > trade.buy.execution_timestamp:
-                flag = True
-            if flag and ts > trade.sell.execution_timestamp:
-                flag = False
-                trade.max_percent_up = max_percent_up
-                trade.max_draw_down = max_draw_down
-                trade_index += 1
-            
-            if flag:
-                cur_percent_trade_value = (trade.buy.execution_price - row[trade.ticker+'_close']) / trade.buy.execution_price
-                if cur_percent_trade_value > max_percent_up:
-                    max_percent_up = cur_percent_trade_value
-                if cur_percent_trade_value < max_draw_down:
-                    max_draw_down = cur_percent_trade_value
-    return trades
-
-
-def print_account_stats(account:Account, underlying:CandleData=None):
+def print_account_stats(account:SimulatedAccount, underlying:CandleData=None):
     """Calculates many performance metrics for the account history and prints them to the console.
     
     :param account: The account to calculate the performance metrics of.
@@ -133,22 +39,24 @@ def print_account_stats(account:Account, underlying:CandleData=None):
     
     print(f'\n')
     logger.info(f'General performance metrics:')
+    history = account.get_history_as_list()
     
     logger.info('Max drawdown: ${:.0f}, {:.1f}%'.format(get_max_drawdown(account), get_max_drawdown_as_percent(account)))
-    vh = list(account.value_history.values())
+    vh = account.get_history_as_list()
     logger.info('Starting value: ${}; final value: ${:.0f}'.format(vh[0], vh[-1]))
-    logger.info('Total return: {:.1f}%, annualized return {:.1f}%'.format(get_ROI(account), get_annualized_ROI(account)))
+    logger.info('Total return: {:.1f}%, annualized return {:.1f}%'.format(get_ROI(history), get_annualized_ROI(account)))
 
-    # Get the buys and the sells
-    n_buys = len([o for o in account._order_history if o.side == OrderSide.BUY])
-    n_sells = len([o for o in account._order_history if o.side == OrderSide.SELL])
-    
     print("\n")
     logger.info(f'Trade stats:')
-    logger.info(f'# of buys: {n_buys}, # sells: {n_sells}.')
+    # Get the buys and the sells
+    for ticker in account._order_history.keys():
+        n_buys = len(account._order_history[ticker][OrderSide.BUY])
+        n_sells = len(account._order_history[ticker][OrderSide.SELL])
+        
+        logger.info(f'{ticker} # of buys: {n_buys}, # sells: {n_sells}.')
     
     # parse the buys and sells into trades and do basic analysis on them
-    trades = parse_order_history_into_trades(account)
+    trades = account.get_trades()
     # trade_profits = [t.get_net_profit() for t in trades]
     # mean_profit = func_for_list_if_length(trade_profits, np.mean)
     trade_profits_perc = [t.get_profit_percent() for t in trades]
@@ -168,12 +76,17 @@ def print_account_stats(account:Account, underlying:CandleData=None):
     logger.info('Win rate: {:.1f} %'.format(get_win_percentage(trades=trades)))
     
     # vwr
-    logger.info('VWR: {:.3f}, VWR curve fit: {:.3f}'.format(get_vwr(account), get_curve_fit_vwr(account)))
+    logger.info('VWR: {:.3f}, VWR curve fit: {:.3f}'.format(get_vwr(history), get_curve_fit_vwr(history)))
     if underlying is not None:
         logger.info('Alpha relative to ticker {} {:.2f}%'.format(*get_alpha(account, underlying)))
 
-
-def get_win_percentage(account:Account=None, trades=None) -> float:
+    # set the global variable for this
+    # ticker = underlying.tickers[0]
+    set_benchmark_score(underlying.df[ticker+'_close'], get_curve_fit_vwr)
+    logger.info(f'VWR difference: {get_vwr_curve_fit_difference(account.get_history_as_list())}')
+    
+    
+def get_win_percentage(account:SimulatedAccount=None, trades=None) -> float:
     """Returns the win percentage of the account.
     
     :param account: The account to calculate the win percentage of.
@@ -181,7 +94,8 @@ def get_win_percentage(account:Account=None, trades=None) -> float:
     :return: The win percentage of the account.
     """
     if trades is None:
-        trades = parse_order_history_into_trades(account)
+        logger.debug(f'Calculating win percentage from account {account}.')
+        trades = account.get_trades()
     
     n_wins = len([t for t in trades if t.get_net_profit() > 0])
     if len(trades) == 0:
@@ -189,19 +103,17 @@ def get_win_percentage(account:Account=None, trades=None) -> float:
     return 100*n_wins / len(trades)
 
 
-def get_ROI(account:Account) -> float:
-    """Returns the ROI of the account.
+def get_ROI(data:Collection) -> float:
+    """Returns the ROI of the data.
     
-    :param account: The account to calculate the ROI of.
-    :return: The ROI of the account as a percentage (ie 11 being 11%)
+    :param data: The data to calculate the ROI of.
+    :return: The ROI of the data as a percentage (ie 11 being 11%)
     """
     # Returns the percentage increase/decrease
-    initial:float = list(account.value_history.values())[0] 
-    final:float = list(account.value_history.values())[-1]
-    return (final / initial - 1)*100
+    return (data[-1] / data[0]  - 1)*100
 
 
-def get_annualized_ROI(account:Account) -> float:
+def get_annualized_ROI(account:SimulatedAccount) -> float:
     """Returns the annualized returns of the account. 
     
     Note that this is an approximation as it does not account for business days/weekends/holidays.
@@ -210,7 +122,7 @@ def get_annualized_ROI(account:Account) -> float:
     :return: The annualized ROI of the account as a percentage (ie 11 being 11%)
     """
     
-    roi = get_ROI(account)
+    roi = get_ROI(account.get_history_as_list())
 
     end = list(account.value_history.keys())[-1]
     start = list(account.value_history.keys())[0]
@@ -219,14 +131,14 @@ def get_annualized_ROI(account:Account) -> float:
     return annualized_roi*100
 
 
-def get_expected_ROI(account:Account) -> float:
+def get_expected_ROI(account:SimulatedAccount) -> float:
     """Fits a curve to the account value history and returns the expected return.
     
     :param account: The account to calculate the expected ROI of.
     :return: The expected ROI of the account as a percentage (ie 11 being 11%)
     """
     
-    value_history = list(account.value_history.values())
+    value_history = account.get_history_as_list()
     start_value = value_history[0]
     
     mean_return_per_timestep = fit_exponential_curve_fixed_start(value_history)
@@ -234,13 +146,13 @@ def get_expected_ROI(account:Account) -> float:
     return (end_val - start_value)/start_value*100
 
 
-def get_expected_annualized_ROI(account:Account) -> float:
+def get_expected_annualized_ROI(account:SimulatedAccount) -> float:
     """Fits a curve to the account value history and returns the expected annualized return.
     
     :param account: The account to calculate the expected annualized ROI of.
     :return: The expected annualized ROI of the account as a percentage (ie 11 being 11%)
     """
-    value_history = list(account.value_history.values())
+    value_history = account.get_history_as_list()
     start_value = value_history[0]
     
     end = list(account.value_history.keys())[-1]
@@ -252,7 +164,7 @@ def get_expected_annualized_ROI(account:Account) -> float:
     return 100*((1 + mean_return)**(1/n_years) - 1)
     
 
-def get_max_drawdown(account:Account) -> float:
+def get_max_drawdown(account:SimulatedAccount) -> float:
     """Returns the maximum drawdown of the account in dollars.
     
     :param account: The account to calculate the maximum drawdown of.
@@ -269,14 +181,14 @@ def get_max_drawdown(account:Account) -> float:
     return max_drawdown
 
 
-def get_max_drawdown_as_percent(account:Account) -> float:
+def get_max_drawdown_as_percent(account:SimulatedAccount) -> float:
     """Returns the maximum drawdown of the account as a percentage of the initial account value."""
-    return 100*get_max_drawdown(account) / list(account.value_history.values())[0]
+    return 100*get_max_drawdown(account) / account.get_history_as_list()[0]
  
     
-def fit_exponential_curve_fixed_start(y:list[float]) -> np.ndarray:
+def fit_exponential_curve_fixed_start(y:list[float]) -> float:
     """Fits an exponential curve to the data with the starting value being equal according to formula
-    y = start_value * (1 + r)**t
+    y = start_value * (1 + r)**t; or y = start_value * exp(r*t)
     The fitting is done in the log space in order to give equal weighting to data over time. 
     
     Returns the mean growth rate per timestep."""
@@ -288,12 +200,17 @@ def fit_exponential_curve_fixed_start(y:list[float]) -> np.ndarray:
         return np.log(start_value) + t*np.log(1 + r)
         # return np.log(start_value) + y*np.log(t)
 
+    # check for the case where the value is constant over time
+    if len(set(y)) == 1:
+        return 0
+
+
     popt, pcov = curve_fit(exponential_growth, time, np.log(y))     # your data x, y to fit
     r_mean = popt[0]                                        # average growth per timestep
     return r_mean
 
 
-def get_vwr(account:Account, tau:float=4, stddev_max:float=0.2) -> float:
+def get_vwr(data:Collection, tau:float=4, stddev_max:float=0.2) -> float:
     """Calculates the variability weighted return for the account."""
     '''Variability-Weighted Return: Better SharpeRatio with Log Returns
     Alias:
@@ -308,22 +225,21 @@ def get_vwr(account:Account, tau:float=4, stddev_max:float=0.2) -> float:
     '''
 
     logger.debug('Calculating VWR')
-    value_history = list(account.value_history.values())
-    start_val, end_val = value_history[0], value_history[-1]
+    start_val, end_val = data[0], data[-1]
     
-    mean_return_per_timestep = (end_val/start_val)**(1/len(value_history)) - 1
+    mean_return_per_timestep = (end_val/start_val)**(1/len(data)) - 1
 
-    expected_end_val = start_val*(1 + mean_return_per_timestep)**len(value_history)
+    expected_end_val = start_val*(1 + mean_return_per_timestep)**len(data)
         
     # penalizing variance defined as account_value - mean_exponential growth
-    zero_variability_returns = [start_val*np.exp(mean_return_per_timestep*i) for i in range(len(value_history))]
+    zero_variability_returns = [start_val*np.exp(mean_return_per_timestep*i) for i in range(len(data))]
     logger.debug(f'vwr expected end val: {zero_variability_returns[-1]}')
     
     # difference between actual and zero-variability prices divided by zero-variability prices to normalize 
-    log_difference = [v/v_zero_var - 1 for v, v_zero_var in zip(value_history, zero_variability_returns)]
+    log_difference = [v/v_zero_var - 1 for v, v_zero_var in zip(data, zero_variability_returns)]
 
-    sigma_p = np.std(log_difference)    # *value_history[0]   # multiply by the starting value as we normalized this earlier, so sigma is in dollars
-    if sigma_p > stddev_max: 
+    sigma_p = np.std(log_difference)    # *data[0]   # multiply by the starting value as we normalized this earlier, so sigma is in dollars
+    if sigma_p > stddev_max:
         logger.warning(f'VWR sigma_p: {sigma_p} is greater than the max allowed: {stddev_max}. returning roi')
         return expected_end_val/start_val - 1
     
@@ -338,7 +254,7 @@ def get_vwr(account:Account, tau:float=4, stddev_max:float=0.2) -> float:
     return log_return * variance_term
 
 
-def get_curve_fit_vwr(account:Account, tau:float=4, stddev_max:float=0.2) -> float:
+def get_curve_fit_vwr(data:Collection, tau:float=4, stddev_max:float=0.2) -> float:
     """Calculates the variability weighted return for the account. If less that 0 returns the expected ROI"""
     '''Variability-Weighted Return: Better SharpeRatio with Log Returns
     Alias:
@@ -353,21 +269,20 @@ def get_curve_fit_vwr(account:Account, tau:float=4, stddev_max:float=0.2) -> flo
     '''
     logger.debug('calculating curve fit vwr')
     
-    mean_return_per_timestep = fit_exponential_curve_fixed_start(list(account.value_history.values()))
+    mean_return_per_timestep = fit_exponential_curve_fixed_start(data)
     
-    value_history = list(account.value_history.values())
-    start_value = value_history[0]
+    start_value = data[0]
     # penalizing variance defined as account_value - mean_exponential growth
-    zero_variability_returns = [start_value*np.exp(mean_return_per_timestep*i) for i in range(len(value_history))]
+    zero_variability_returns = [start_value*np.exp(mean_return_per_timestep*i) for i in range(len(data))]
     logger.debug(f'Expected end val: {zero_variability_returns[-1]}') 
     
     # difference between actual and zero-variability prices divided by zero-variability prices to normalize
-    normalized_differences = [v/v_zero_var - 1 for v, v_zero_var in zip(value_history, zero_variability_returns)]
+    normalized_differences = [v/v_zero_var - 1 for v, v_zero_var in zip(data, zero_variability_returns)]
     
     sigma_p = np.std(normalized_differences)    # * start_value
     if sigma_p > stddev_max: 
-        logger.warning(f'VWR sigma_p is greater than the max allowed. Returning roi')
-        return get_expected_ROI(account)
+        logger.warning(f'VWR sigma_p is greater than the max allowed. Returning curve fit roi')
+        return zero_variability_returns[-1]/start_value - 1
     logger.debug(f'VWR curve fit sigma_p: {sigma_p}')
     
     log_return = np.log(zero_variability_returns[-1]/start_value)
@@ -383,7 +298,7 @@ def get_curve_fit_vwr(account:Account, tau:float=4, stddev_max:float=0.2) -> flo
     return vwr
 
 
-def get_alpha(account:Account, underlying:CandleData, rf:float=0) -> Tuple[str, float]:
+def get_alpha(account:SimulatedAccount, underlying:CandleData, rf:float=0) -> Tuple[str, float]:
     """Calculates the alpha of the account."""
     # alpha = (r - r_f) - beta * (r_m - r_f)
     # r = account return
@@ -393,13 +308,26 @@ def get_alpha(account:Account, underlying:CandleData, rf:float=0) -> Tuple[str, 
     # r_f = risk free rate
     beta = 1
 
-    roi = get_ROI(account)
+    roi = get_ROI(account.get_history_as_list())
     ticker = underlying.tickers[0]
-    underlying_return = 100*(underlying.df[ticker+'_close'][-1] - underlying.df[ticker+'_close'][0]) / underlying.df[ticker+'_close'][0]
+    underlying_return = get_ROI(underlying.df[ticker+'_close'])
     alpha = roi - rf - beta*(underlying_return - rf)
     return ticker, alpha
 
 
-def get_vwr_curve_alpha(account:Account, underlying:CandleData):
-    vwr = get_curve_fit_vwr(account)
+UNDERLYING_SCORE = None
+
+
+def set_benchmark_score(benchmark_history:Collection, fitness_function:Callable):
+    """Sets the benchmark score to be used in the score function."""
+    global UNDERLYING_SCORE
+    UNDERLYING_SCORE = fitness_function(benchmark_history)
     
+
+def get_vwr_curve_fit_difference(account_values:Collection):
+    """Returns the difference between the curve fit vwr and the benchmark score global variable."""    
+    
+    assert UNDERLYING_SCORE is not None, 'Underlying score must be set before calling this function. Call set_benchmark_score'
+    
+    account_vwr = get_curve_fit_vwr(account_values)
+    return account_vwr - UNDERLYING_SCORE  

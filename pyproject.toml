@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "parallelized_algorithmic_trader"
-version = "1.0.3"
+version = "1.0.4"
 description = "A python platform for backtesting trading strategies with polygon data source and TD Ameritrade integration."
 authors = ["brucejiverson <brucejamesiverson@gmail.com>"]
 license = "MIT"

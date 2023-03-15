@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from parallelized_algorithmic_trader.orders import MarketOrder, OrderBase, OrderSide
 from parallelized_algorithmic_trader.indicators import IndicatorMapping
 from parallelized_algorithmic_trader.base import Base
-from parallelized_algorithmic_trader.broker import Account
+from parallelized_algorithmic_trader.broker import SimulatedAccount
 
 
 class PositionSizer(Enum):
@@ -39,7 +39,7 @@ class StrategyBase(Base):
         self._position_sizer = position_sizer
         self.ordered_feature_names = [n for sublist in [ind.names for ind in self.indicator_mapping] for n in sublist]
 
-    def _get_sized_market_buy_order(self, ticker:str, account:Account) -> MarketOrder:
+    def _get_sized_market_buy_order(self, ticker:str, account:SimulatedAccount) -> MarketOrder:
         """Returns a market order for the given ticker and side.
         
         :param ticker: ticker to buy
@@ -65,7 +65,7 @@ class StrategyBase(Base):
         else:
             return cur_state[ticker+'_close']
 
-    def act(self, state:Dict[str, float], account:Account) -> List[OrderBase] | None:
+    def act(self, state:Dict[str, float], account:SimulatedAccount) -> List[OrderBase] | None:
         """This method should be overridden by all subclasses. It should take in the current state of the environment and return an action to take.
         This method exists here in this form for type hinting purposes only"""
         raise NotImplementedError("This method should be overridden by all subclasses.")

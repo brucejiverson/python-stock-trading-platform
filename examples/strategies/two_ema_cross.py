@@ -3,7 +3,7 @@ from typing import List, Dict
 
 import parallelized_algorithmic_trader.orders as orders                                     # trading
 from parallelized_algorithmic_trader.strategy import StrategyBase                           # algorithm
-from parallelized_algorithmic_trader.broker import Account
+from parallelized_algorithmic_trader.broker import SimulatedAccount
 from parallelized_algorithmic_trader.indicators import IndicatorConfig, IndicatorMapping    # feature construction
 
 
@@ -24,7 +24,7 @@ class TwoEMACross(StrategyBase):
             if ic.name == name: return ic
         raise ValueError(f'IndicatorConfig with name {name} not found')
 
-    def act(self, account:Account, state:Dict[str, float]) -> orders.OrderBase | None:
+    def act(self, account:SimulatedAccount, state:Dict[str, float]) -> orders.OrderBase | None:
         # Check if an order is pending ... if yes, we cannot send a 2nd one
         if account.has_pending_order:
             # self.logger.debug(f'waiting for order to execute...')

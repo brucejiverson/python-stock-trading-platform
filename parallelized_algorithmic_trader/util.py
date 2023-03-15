@@ -9,9 +9,8 @@ from datetime import datetime
 logger = logging.getLogger('pat')
 
 
-# get the path to the installed directory
-ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
-ROOT_PATH = os.path.join(ROOT_PATH, '..')
+# get the path to the parent directory of this file
+ROOT_PATH = '/'.join(os.path.dirname(os.path.realpath(__file__)).split('/')[:-1])
 
 MODEL_DIRECTORY = os.path.join(ROOT_PATH, 'models')
 DATA_DIRECTORY = os.path.join(ROOT_PATH, 'data')

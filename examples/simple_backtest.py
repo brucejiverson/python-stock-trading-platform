@@ -21,10 +21,10 @@ lvl = logging.INFO
 rl.setLevel(lvl)
 
 
-ticker = 'AAPL'
+ticker = 'SPY'
 end = datetime.datetime.now()
 res = TemporalResolution.HOUR
-start = end-datetime.timedelta(weeks=52*1)
+start = end-datetime.timedelta(weeks=4*24)
 candle_data = po.get_candle_data(os.environ['POLYGON_IO'], [ticker], start, end, res)
 
 

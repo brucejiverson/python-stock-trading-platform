@@ -167,13 +167,13 @@ class TDAmeritradeBroker(RealBrokerage):
         
         candles.rename(columns=new_col_names, inplace=True)
         candles.set_index(['timestamp'], drop=True, inplace=True)
+        candles['Source'] = ['TDAmeritrade' for _ in range(len(candles))]
         
         self.logger.debug(f'Successfully retrieved candle data for {config.symbol}')
         return CandleData(
             candles, 
             [config.symbol], 
-            config.get_resolution_from_period(), 
-            "TDAmeritrade"
+            config.get_resolution_from_period()
             )
 
     def get_recent_price_history(self, n_periods=10) -> CandleData:

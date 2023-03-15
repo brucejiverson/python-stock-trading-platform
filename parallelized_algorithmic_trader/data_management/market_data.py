@@ -2,10 +2,10 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 from enum import Enum
-from datetime import datetime
 from typing import Tuple, List
 
 from parallelized_algorithmic_trader.base import Base
+import parallelized_algorithmic_trader.data_management.data_utils as data_utils
 
 
 class TemporalResolution(Enum):
@@ -47,7 +47,9 @@ def build_data_file_name(ticker:str, resolution:TemporalResolution) -> str:
     :param ticker: The ticker of the equity
     :resolution: The time per candle
     """
-    return resolution.name.lower() + '/' + ticker +'.pkl'
+    # f'stocks/{resolution.name.lower()}/{ticker}.pkl'
+    # return formatted string
+    return "stocks/{}/{}.pkl".format(resolution.name.lower(), ticker)
 
 
 class CandleData(EquityData):
@@ -55,13 +57,11 @@ class CandleData(EquityData):
         self, 
         df:pd.DataFrame,
         tickers:List[str],
-        resolution: TemporalResolution, 
-        source:str
+        resolution: TemporalResolution
         ):
 
         super().__init__(resolution)
         self.df:pd.DataFrame = CandleData.vaidate_and_clean_data(df, tickers)
-        self.source:str = source
         self.tickers:List[str] = tickers
         
         # update the start and end
@@ -83,7 +83,7 @@ class CandleData(EquityData):
         if 0:
             cleaned_df = df.copy()
         else:
-            cleaned_df = clean_dataframe(df)
+            cleaned_df = data_utils.sanitize_dataframe(df)
         return cleaned_df
 
         # do some basic clean up and validation of the dataframe format
@@ -154,10 +154,10 @@ class CandleData(EquityData):
 
     def split(self, fraction:float=0.2) -> Tuple[CandleData, CandleData]:
         """Returns two new objects split into two fractions. Returns a tuple of two FinancialData objects, (train, test)"""
-        train_df, test_df = split_data_frame(self.df, fraction)
+        train_df, test_df = split_data_frame_by_fraction(self.df, fraction)
 
-        train_data = CandleData(train_df, self.tickers, self.resolution, self.source)
-        test_data = CandleData(test_df, self.tickers, self.resolution, self.source)
+        train_data = CandleData(train_df, self.tickers, self.resolution)
+        test_data = CandleData(test_df, self.tickers, self.resolution)
         
         return train_data, test_data
     
@@ -169,14 +169,14 @@ class CandleData(EquityData):
     #     folds = []
     #     last_split_idx = 0
     #     for i in range(k):
-    #         fold = CandleData(self.resolution, self.source)
+    #         fold = CandleData(self.resolution)
     #         split_idx = round( ((i+1)/k) * data.shape[0])
     #         fold.add_data(data.iloc[last_split_idx::i*split_idx], self.tickers)
     #         folds.append(fold)
     #     return folds
 
 
-def split_data_frame(df:pd.DataFrame, fraction:float=0.2) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def split_data_frame_by_fraction(df:pd.DataFrame, fraction:float=0.2) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Returns two dataframes split into two fractions as a tuple.
     
     :param df: The dataframe to split
@@ -188,52 +188,4 @@ def split_data_frame(df:pd.DataFrame, fraction:float=0.2) -> Tuple[pd.DataFrame,
     split_idx = round(fraction * df.shape[0])
     df1, df2 = df.iloc[0:split_idx], df.iloc[split_idx::]
     return df1, df2
-
-
-def clean_dataframe(df:pd.DataFrame) -> pd.DataFrame:
-    """This function formats the dataframe according to the assets that are in it.
-    
-    Needs to be updated to handle multiple assets. Note that this should only be used before high low open are stripped from the data.
-    
-    :param df: The dataframe to format
-    """
-    formatted_df = df.copy()
-    
-    # check to see if the dataframe has a timestamp column and if so make the index the timestamp
-    if 'timestamp' in formatted_df.columns and type(formatted_df.index) != pd.DatetimeIndex:
-        # drop any duplicate timestamps
-        formatted_df.drop_duplicates(subset='timestamp', inplace=True)
-        formatted_df.set_index('timestamp', inplace=True, verify_integrity=True, drop=True)
-    elif type(formatted_df.index) != pd.DatetimeIndex:
-        raise ValueError('Dataframe must have a column named timestamp or the index must be a DatetimeIndex.')
-
-    # sort by index
-    formatted_df.sort_index(inplace=True)
-
-    # drop the last line. polygon.io does this sometimes, not sure why. ignoring for now
-    if pd.isnull(formatted_df.index[-1]): 
-        formatted_df = formatted_df[:-1]
-
-    # if len(formatted_df.columns) > 6:
-    #     print('Dataframe has more than 5 columns. Only open, high, low, close, volume will be used, the rest will be dropped.')
-    #     formatted_df = formatted_df[['open', 'high', 'low', 'close', 'volume', 'timestamp']]
-
-    # get the number of duplicates in the dataframe
-    # num_duplicates = formatted_df.index.duplicated().sum()
-    # print(f'Number of duplicates: {num_duplicates}')
-    # formatted_df = formatted_df.loc[~formatted_df.index.duplicated(keep = 'first')]     # this is intended to remove duplicates. ~ flips bits in the mask
-    # Replacing infinite with nan 
-    formatted_df.replace([np.inf, -np.inf], np.nan, inplace=True) 
-    formatted_df.dropna(inplace=True)
-
-    # # search for inconsistent jumps in the timestamps of the data frame
-    # for i in range(1, len(formatted_df)):
-    #     if formatted_df.index[i] - formatted_df.index[i-1] != timedelta(minutes=1):
-    #         print('Inconsistent time stamps found at index: {}'.format(i))
-    #         print('Timestamps: {} and {}'.format(formatted_df.index[i-1], formatted_df.index[i]))
-    #         print('Difference: {}'.format(formatted_df.index[i] - formatted_df.index[i-1]))
-    #         print('Dropping the inconsistent timestamps')
-    #         formatted_df.drop(formatted_df.index[i], inplace = True)
-
-    return formatted_df
 

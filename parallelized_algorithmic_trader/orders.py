@@ -15,7 +15,7 @@ class OrderSide(Enum):  # TD AMERITRADE calls this "instruction".
 
 
 # all of the order classes again except with an additional field for the account number uuid
-class OrderBase:
+class OrderBase(object):
     """This is the base class for all orders. It is not meant to be instantiated directly.
     
     A note on slots and inheritance: Now, regarding inheritance: for an instance to be dict-less, all classes up its inheritance 

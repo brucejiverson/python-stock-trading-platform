@@ -4,7 +4,7 @@ import uuid
 from parallelized_algorithmic_trader.indicators import IndicatorMapping
 from parallelized_algorithmic_trader.strategy import StrategyBase
 from parallelized_algorithmic_trader.orders import OrderBase, MarketOrder, OrderSide
-from parallelized_algorithmic_trader.broker import Account
+from parallelized_algorithmic_trader.trading.simulated_broker import Account
 
 
 class RandomBot(StrategyBase):

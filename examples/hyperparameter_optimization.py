@@ -4,14 +4,14 @@ import datetime
 import hyperopt
 import logging
 
-import parallelized_algorithmic_trader.data_management.polygon_io as po                                                                     # data
+from parallelized_algorithmic_trader.data_management.data import get_candle_data
 from parallelized_algorithmic_trader.strategy import StrategyConfig                                                         # algorithm
 from parallelized_algorithmic_trader.backtest import build_features, set_train_test_true, run_simulation_on_candle_data     # simulation 
 import parallelized_algorithmic_trader.indicators as indicators                                                             # feature construction
 from parallelized_algorithmic_trader.indicators import IndicatorConfig, IndicatorMapping                                    # feature construction
-from parallelized_algorithmic_trader.broker import TemporalResolution                                                     # tools for knowing current position
+from parallelized_algorithmic_trader.trading.simulated_broker import TemporalResolution                                                     # tools for knowing current position
 
-from parallelized_algorithmic_trader.examples.strategies.two_ema_cross import TwoEMACross                                   # algorithm
+from examples.strategies.two_ema_cross import TwoEMACross                                   # algorithm
 from parallelized_algorithmic_trader.performance_analysis import get_curve_fit_vwr                                          # scoring/fitness
 
 
@@ -19,24 +19,28 @@ from parallelized_algorithmic_trader.performance_analysis import get_curve_fit_v
 n_days = 30
 now = datetime.datetime.now()
 res = TemporalResolution.MINUTE
-candle_data = po.get_candle_data(['SPDN'], now-datetime.timedelta(days=n_days), now, res)
+ticker = 'SPY'
+candle_data = get_candle_data([ticker], res, now-datetime.timedelta(days=n_days), now)
 
 
 def objective_func(hyper_params, test=False) -> float:
+    
+    global ticker
+    global candle_data
+    
     print(f'Running hyperparameter optimization test with hyper_params: {hyper_params}')
     short_period, long_period = hyper_params['short_period'], hyper_params['long_period']
     indicator_mapping:IndicatorMapping = [
-        IndicatorConfig('SPDN', indicators.EMA, args=(short_period,)),   # fast
-        IndicatorConfig('SPDN', indicators.EMA, args=(long_period,)),    # slow
+        IndicatorConfig(ticker+'_close', None),
+        IndicatorConfig(ticker, indicators.EMA, args=(short_period,)),   # fast
+        IndicatorConfig(ticker, indicators.EMA, args=(long_period,)),    # slow\
     ]
 
     config = StrategyConfig(
         indicator_mapping=indicator_mapping,
         strategy=TwoEMACross,
-        tickers=['SPDN'],
-        kwargs={},
-        quantity=1
-        )
+        tickers=[ticker],
+        kwargs={})
     
     # set up the data
     build_features(candle_data, [indicator_mapping])
@@ -47,14 +51,13 @@ def objective_func(hyper_params, test=False) -> float:
         use_test_data=test,
         display_progress_bar=False,
         plot=test,
-        verbose=test,
         log_level=logging.INFO
         )
     
     if test:
         plt.show()
     
-    return -get_curve_fit_vwr(results[0].account)
+    return -get_curve_fit_vwr(results[0].account.get_history_as_list())
 
 
 if __name__ == '__main__':

@@ -15,8 +15,8 @@ import datetime
 import os
 
 # systems from this repo
-from parallelized_algorithmic_trader.broker import TemporalResolution
-import parallelized_algorithmic_trader.data_management.polygon_io as po
+from parallelized_algorithmic_trader.data_management.data_utils import TemporalResolution
+from parallelized_algorithmic_trader.data_management.data import get_candle_data
 
 
 # for each stock in the S&P500, get the price history for the last 10 years for day resolution
@@ -27,9 +27,6 @@ res = TemporalResolution.DAY
 # get a list of the stocks sorted alphabetically
 stocks = df['Symbol'].sort_values().tolist()
 
-
-for stock in stocks:
-    candle_data = po.get_candle_data(os.environ['POLYGON_IO'], [stock], start, end, res)
-    
+get_candle_data(stocks, res, start, end)
     
     

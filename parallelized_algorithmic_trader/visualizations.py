@@ -1,206 +1,154 @@
+from typing import List, Optional, Tuple, Dict
 import matplotlib.pyplot as plt
-import mplfinance as mpf
-from typing import List, Optional
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import Formatter
+import matplotlib.backends.backend_pdf as pdf_backend
+import os
 
-from parallelized_algorithmic_trader.broker import SimulatedAccount, OrderSide
-from parallelized_algorithmic_trader.data_management.market_data import CandleData
+from parallelized_algorithmic_trader.trading.simulated_broker import SimulatedAccount
 from parallelized_algorithmic_trader.util import get_logger
 
 logger = get_logger(__name__)
 
 
-def plot_backtest_results_mpf(candle_datas:List[CandleData], account:SimulatedAccount):
-    """Plots the account history"""
+class TimeAxisFormatter(Formatter):
+    def __init__(self, dates, fmt='%Y-%m-%d %H:%M'):
+        self.dates = dates
+        self.fmt = fmt
+
+    def __call__(self, x, pos=0):
+        'Return the label for time x at position pos'
+        ind = int(np.round(x))
+        if ind >= len(self.dates) or ind < 0:
+            return ''
+
+        return self.dates[ind].strftime(self.fmt)
+
+
+def create_pdf_performance_report(
+    performance_metrics: Dict[str, str], 
+    df: pd.DataFrame, 
+    account: SimulatedAccount,
+    tickers: List[str] = None, 
+    strategy_name: str = '', 
+    save_folder: str | None = None
+) -> None:
     
-    fig, (ax1, ax2) = plt.subplots(2, 1)
+    images = [
+        create_table_for_performance_metrics(performance_metrics),
+        plot_backtest_results(df, account, tickers, strategy_name),
+        plot_trade_profit_hist(account),
+        plot_underwater(account)
+    ]
     
-    df = candle_datas[0].df
-    # now plot the orders from the account
-    df['buys'] = np.nan
-    df['sells'] = np.nan
-    for o in account._order_history:
-        if o.side == OrderSide.BUY:
-            df.loc[o.execution_timestamp, 'buys'] = o.execution_price
-        elif o.side == OrderSide.SELL:
-            df.loc[o.execution_timestamp, 'sells'] = o.execution_price
-
-    # scale the buys and sells up/down cause its prettier
-    # df['buys'] = df['buys']*.999
-    # df['sells'] = df['sells']*1.001
-    apd = mpf.make_addplot(df['buys'], ax=ax1, type='scatter', marker='v', color='g')
-    apd2 = mpf.make_addplot(df['sells'], ax=ax1, type='scatter', marker='^', color='r')
-
-    # now plot the candle close data
-    for candle_data in candle_datas:
-        mpf.plot(candle_data.df, # the dataframe containing the OHLC (Open, High, Low and Close) data
-            ax = ax1, # the matplotlib axes object to plot on
-            # type='candle', # use candlesticks 
-            type='line',
-            volume=ax1.twinx(), # also show the volume
-            style='yahoo',  # choose the yahoo style
-            addplot=[apd, apd2],
-        )
-            # warn_too_much_data=len(df) + 1,
-
-    ax1.title.set_text('Price History and Features With Order Overlay')
-
-    # plot the account value over time
-    ax2.plot(account.value_history.keys(), account.value_history.values(), label='account value', color='black')
-    ax2.title.set_text(f'Account Value Over Time')
-    fig.suptitle(f'parallelized_algorithmic_trader Backtest Results', fontsize=14, fontweight='bold')
-    fig.autofmt_xdate()
-
-
-def plot_backtest_results(
-    feature_df:pd.DataFrame, 
-    account:SimulatedAccount=None, 
-    tickers:List[str]=None, 
-    strategy_name:str='', 
-    use_datetimes:bool=False,
-    save_folder:str|None=None):
-    """Plots the account history"""
+    fname = f'{strategy_name}_performance_report.pdf'
+    fpath = os.path.join(save_folder, fname) if save_folder is not None else fname
     
-    # figure out if we need 3 axes or 2
+    with pdf_backend.PdfPages(fpath) as pdf:
+        pdf.infodict()['Title'] = fname
+        
+        for fig, ax in images:
+            pdf.savefig(fig)
+            
+
+def create_table_for_performance_metrics(performance_metrics:Dict[str, str], input_ax:plt.Axes=None) -> Tuple[plt.Figure, plt.Axes]:
+    """Create a plot of the performance metrics text. Performance metrics is a dictionary with the row labels as the keys and the cell contents are the values."""
+    if input_ax is None:
+        fig, ax = plt.subplots()
+        fig.tight_layout()
+    else:
+        ax = input_ax
+        
+    ax.axis('off')
+    ax.axis('tight')
+    cell_text = [[val] for val in performance_metrics.values()]
+    ax.table(cellText=cell_text, rowLabels=list(performance_metrics.keys()), loc='center')
+    # add a title
+    ax.set_title(f'Performance Metrics')
+    
+    if input_ax is None:
+        fig.tight_layout()
+    return fig, ax
+
+    
+def parse_columns_by_feature_range(df:pd.DataFrame, tickers:List[str]) -> Tuple[List[str], List[str]]:
+    """Returns the names of the features that should be plotted on the price axis"""
+    
+    candle_suffixes = ('_low', '_high', '_open', '_close', '_volume')
+    cols_to_ignore = [t+c for t in tickers for c in candle_suffixes]
+    cols_to_ignore.append('Source')
+
+    features_for_price_axis = []
+    features_for_special_axis = []
+    
+    # parse out the features that should be plotted on the price axis and the features that are in different ranges
+    equity_range = df[f'{tickers[0]}_close'].max(), df[f'{tickers[0]}_close'].min()
+    for feature_name in df.columns:
+        if feature_name in cols_to_ignore:
+            continue
+        
+        if any([txt in feature_name.lower() for txt in ('minima', 'maxima')]):
+            features_for_price_axis.append(feature_name)
+            continue
+        
+        feature_range = df[feature_name].max(), df[feature_name].min()
+        # search for the first valid number of the feature
+        for i in range(len(df)):
+            if not np.isnan(df[feature_name].iloc[i]):
+                feature_start = df[feature_name].iloc[i]
+                break
+        feature_end = df[feature_name].iloc[-1]
+        
+        feature_range_spans = feature_range[0] > equity_range[0] and feature_range[1] < equity_range[1]
+        feature_range_contained = equity_range[0] > feature_start > equity_range[1] or equity_range[0] > feature_end > equity_range[1]
+        # now get the config relating to this feature
+        if feature_range_spans or feature_range_contained:
+            features_for_price_axis.append(feature_name)
+        else:
+            features_for_special_axis.append(feature_name)
+            
+    return features_for_price_axis, features_for_special_axis
+
+
+def plot_backtest_results(df:pd.DataFrame, account:SimulatedAccount, tickers:List[str]=None, strategy_name:str='') -> Tuple[plt.Figure, plt.Axes]:
+    """Plots the account history, price history of the assets being traded, features, and performance metrics"""
+    
     features_for_special_axis = []
     features_for_price_axis = []
-    candle_items = ('_low', '_high', '_open', '_close', '_volume')
-    cols_to_ignore = [t+c for t in tickers for c in candle_items]
-    cols_to_ignore.append('Source')
-    equity_range = feature_df[f'{tickers[0]}_close'].max(), feature_df[f'{tickers[0]}_close'].min()
+    features_for_price_axis, features_for_special_axis = parse_columns_by_feature_range(df, tickers)
 
-    for feature_name in feature_df.columns:
-        if feature_name not in cols_to_ignore:
-            feature_range = feature_df[feature_name].max(), feature_df[feature_name].min()
-            # search for the first valid number of the feature
-            for i in range(len(feature_df)):
-                if not np.isnan(feature_df[feature_name].iloc[i]):
-                    feature_start = feature_df[feature_name].iloc[i]
-                    break
-            feature_end = feature_df[feature_name].iloc[-1]
-            
-            feature_range_spans = feature_range[0] > equity_range[0] and feature_range[1] < equity_range[1]
-            feature_range_contained = equity_range[0] > feature_start > equity_range[1] or equity_range[0] > feature_end > equity_range[1]
-            # now get the config relating to this feature
-            if feature_range_spans or feature_range_contained:
-                features_for_price_axis.append(feature_name)
-            else:
-                features_for_special_axis.append(feature_name)
-
-    n_axis = 1
+    layout = [["price history", "price history"]]
     if len(features_for_special_axis) > 0:
-        n_axis += 1
-    if account is not None:
-        n_axis += 1
+        layout.append(['special features', 'special features'])
+    layout.extend([
+        ["cumulative returns", "cumulative returns"], 
+        ])
+        # ["trade hist", "unused"]
     
-    if n_axis == 1:
-        fig, ax1 = plt.subplots()
-    elif n_axis == 2:
-        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
-    else:
-        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True)
+    fig, axes = plt.subplot_mosaic(layout)
+    
+    plot_price_history(df, tickers, features_for_price_axis, axes['price history'])
+    plot_cumulative_returns(account, df, ax=axes['cumulative returns'])
+    # plot_trade_profit_hist(account, ax=axes['trade hist'])
 
-
+    # plot features not on the price axis
     if len(features_for_special_axis) > 0:
-        if n_axis == 2:
-            spec_ax = ax2
-        else:
-            spec_ax = ax3
         # plot these special features first
         for feature_name in features_for_special_axis:
             if 'OBV' in feature_name:
-                # special case
-                print(f'Warning: OBV is not supported for plotting')
+                logger.warning(f'OBV is not supported for plotting')
                 continue
-            if use_datetimes:
-                feature_df.reset_index().plot(y=feature_name, x='timestamp', kind='line', ax=spec_ax, label=feature_name)
-            else:
-                feature_df.reset_index().plot(y=feature_name, kind='line', ax=spec_ax, label=feature_name)
-    
-    if account is not None:
-        # now plot the trades from the account
-        buys = account.get_all_buys()
-        sells = account.get_all_sells()
-        
-        buy_times = [o.execution_timestamp for o in buys]
-        buy_values = [o.execution_price for o in buys]        
-        
-        sell_times = [o.execution_timestamp for o in sells]
-        sell_values = [o.execution_price for o in sells]
-        
-        if not use_datetimes:
-            sell_times = [feature_df.index.get_loc(t) for t in sell_times]
-            buy_times = [feature_df.index.get_loc(t) for t in buy_times]
-        
-        # scale the buys and sells up/down cause its prettier
-        buy_values = [b*.9995 for b in buy_values]
-        sell_values = [s*1.0005 for s in sell_values]
-    
-        # now plot the orders
-        ax1.scatter(sell_times, sell_values, marker='v', c='r', zorder=4, label='sell')
-        ax1.scatter(buy_times, buy_values, marker='^', c='g', zorder=4, label='buy')
+            df.reset_index().plot(y=feature_name, kind='line', ax=axes['special features'], label=feature_name)
 
-    # now plot the candle close data for each symbol
-    for i, t in enumerate(tickers):
-        if i == 0: kwargs = {'color':'black'}
-        else: kwargs = {}
-        
-        # col_name = f'{t}_close'
-        # # sort through the data for jumps, plotting every time.
-        # res = resolution.get_as_minutes()
-        # previous_break = feature_df.index[0]
-        # for i, (ts, row) in enumerate(feature_df.iterrows()):
-        #     if ts == 0: continue
-        #     last_timestamp = feature_df.index[i-1]
-        #     delta = ts - last_timestamp
-        #     if delta > pd.Timedelta(f'{2*res} minute'):
-        #         # now plot up to the previous timestamp
-        #         section = feature_df.loc[previous_break:last_timestamp]
-        #         ax1.plot(section.index, section[col_name], label=t, **kwargs)
-
-        if use_datetimes:
-            feature_df[f'{t}_close'].plot(ax=ax1, label=t, **kwargs)
-        else:
-            feature_df.reset_index()[f'{t}_close'].plot(ax=ax1, label=t, **kwargs)
-
-    for feature_name in features_for_price_axis:
-        if use_datetimes:
-            if 'minima' in feature_name or 'maxima' in feature_name:
-                feature_df.reset_index().plot.scatter(x='timestamp', y=feature_name, ax=ax1, label=feature_name, s=25, c='b')
-            else:
-                feature_df.plot(y=feature_name, label=feature_name, ax=ax1)
-        else:
-            if 'minima' in feature_name or 'maxima' in feature_name:
-                print(f'Plotting feature {feature_name} as scatter')
-                feature_df.reset_index().reset_index().plot.scatter(x='index', y=feature_name, ax=ax1, label=feature_name, s=25, c='b')
-            else:
-                feature_df.reset_index()[feature_name].plot(ax=ax1, label=feature_name)
-
-    ax1.legend()
-    ax1.set_ylabel('Price (USD)')
-    ax1.title.set_text('Price History and Features With Order Overlay')
-
-    if account is not None:
-        # plot the account value over time
-        if use_datetimes:
-            ax2.plot(account.value_history.keys(), account.value_history.values(), label='account value', color='black')
-        else:
-            ax2.plot(range(len(account.value_history)), account.value_history.values(), label='account value', color='black')
-        ax2.title.set_text(f'Account Value Over Time')
-        ax2.set_ylabel('Account Value (USD)')
-    ax2.tick_params(
-        bottom=use_datetimes,
-        labelbottom=use_datetimes)
     fig.suptitle(f'Backtest Results for {strategy_name.upper()}', fontsize=14, fontweight='bold')
     fig.autofmt_xdate()
+    fig.tight_layout()
     
-    if save_folder:
-        fig.savefig(f'{save_folder}/{strategy_name}_backtest.png')
-    return fig, (ax1, ax2)
+    return fig, axes
+    
 
-
-def plot_underwater(account:SimulatedAccount, use_datetimes:bool=False, save_folder:str=None):
+def plot_underwater(account:SimulatedAccount) -> Tuple[plt.Figure, plt.Axes]:
     """Plots the underwater curve"""
     # get the underwater curve
     latest_high = 0
@@ -214,124 +162,129 @@ def plot_underwater(account:SimulatedAccount, use_datetimes:bool=False, save_fol
 
     df = pd.DataFrame({'underwater': underwater, 'timestamp': times}, index=times)
     # plot the underwater curve
-    if use_datetimes:
-        df.plot(y='underwater', x='timestamp', kind='line', label='underwater', color='black')
-    else:
-        df.plot(y='underwater', kind='line', label='underwater', color='black')
+    fig, ax = plt.subplots()
+    formatter = TimeAxisFormatter(df.index)
+    ax.xaxis.set_major_formatter(formatter)
+    
+    df.plot(y='underwater', kind='line', label='underwater', color='black', ax=ax)
     plt.title('Underwater Curve')
     plt.ylabel('Underwater (%)')
 
     # fill in the area under the curve
     plt.fill_between(df.index, df['underwater'], color='red', alpha=0.5)
 
-    if save_folder:
-        plt.savefig(f'{save_folder}/under_water_curve.png')
+    # if save_folder:
+    #     fig = plt.gcf()
+    #     fig.set_size_inches(12, 8)
+    #     plt.savefig(f'{save_folder}/under_water_curve.png')
+    return fig, ax
 
 
-def plot_cumulative_returns(account:SimulatedAccount, underlying:Optional[pd.DataFrame]=None, use_datetimes:bool=False, save_folder:str=None):
+def plot_price_history(df:pd.DataFrame, tickers:List[str], features_to_plot:List[str]=[], input_ax:plt.Axes=None):
+    
+    if input_ax is None:
+        fig, ax = plt.subplots()
+    else: 
+        ax = input_ax
+    formatter = TimeAxisFormatter(df.index)
+    ax.xaxis.set_major_formatter(formatter)
+    # axes['cumulative returns'].xaxis.set_major_formatter(formatter)
+
+    # plot the candle close data for each symbol
+    for i, t in enumerate(tickers):
+        if i == 0: kwargs = {'color':'black'}
+        else: kwargs = {}
+        
+        df.reset_index()[f'{t}_close'].plot(ax=ax, label=t, **kwargs)
+
+    # plot the features that are on the price axis
+    for feature_name in features_to_plot:
+        # special case for scatter plots
+        if any([txt in feature_name.lower() for txt in ('minima', 'maxima')]):
+            df[feature_name] = df[feature_name].replace(0, np.nan)
+            ax.scatter(x=range(len(df)), y=df[feature_name], label=feature_name, s=25)
+        else:
+            df.reset_index()[feature_name].plot(ax=ax, label=feature_name)
+
+    ax.legend()
+    ax.set_ylabel('Price (USD)')
+    ax.title.set_text('Price History and Features With Order Overlay')
+    if input_ax is None:
+        fig.autofmt_xdate()
+        
+
+def plot_cumulative_returns(
+    account:SimulatedAccount, 
+    underlying:Optional[pd.DataFrame]=None, 
+    ax:Optional[plt.Axes]=None, 
+    save_folder:str=None) -> Tuple[plt.Figure, plt.Axes]:
     """Plots the cumulative returns of the account"""
-    # get the cumulative returns
-    cumulative_returns = []
+            
+    account_cum_returns = []
     times = []
     starting_cash = list(account.value_history.values())[0]
     for time, value in account.value_history.items():
-        cumulative_returns.append(value / starting_cash)
+        account_cum_returns.append(100*value / starting_cash)
         times.append(time)
 
-    fig, ax = plt.subplots(1, 1)  # Create the figure
-    df = pd.DataFrame({'cumulative_returns': cumulative_returns, 'timestamp': times})
-    # plot the cumulative returns
-    if use_datetimes:
-        df.plot(y='cumulative_returns', x='timestamp', ax=ax, kind='line', label='cum. returns', color='black')
-    else:
-        df.plot(y='cumulative_returns', ax=ax, kind='line', label='cum. returns', color='black')
+    if ax is None:
+        fig, ax = plt.subplots(1, 1)  # Create the figure
 
-    plt.title('Cumulative Returns')
-    plt.ylabel('Cumulative Returns (%)')
-
-    # fill in the area under the curve
-    # plt.fill_between(df.index, df['cumulative_returns'], color='green', alpha=0.5)
+    formatter = TimeAxisFormatter(times)
+    ax.xaxis.set_major_formatter(formatter)
+    ax.set_title('Cumulative Returns')
+    # ax.set_ylabel('Cumulative Returns (%)')
+    
+    df = pd.DataFrame({'account_cum_returns': account_cum_returns, 'timestamp': times})
+    df['account_cum_returns'].plot(ax=ax, label='account_cum_returns', color='black')
 
     # plot the underlying cumulative returns
     if underlying is not None:
-        # figure out the close column name
-        close_cols = [c for c in underlying.columns if '_close' == c.lower()[-6:]]
-        for col in close_cols:
-            underlying_cum_returns = underlying[col] / underlying[col].iloc[0]
-            df = pd.DataFrame({'cumulative_returns': underlying_cum_returns, 'timestamp': underlying.index})
-            if use_datetimes:
-                df.plot(y='cumulative_returns', x='timestamp', ax=ax, kind='line', label=f'{col} cum. returns')
-            else:
-                df.drop(columns=['timestamp']).reset_index().reset_index().plot(x='index', y='cumulative_returns', ax=ax, kind='line', label=f'{col} cum. returns')
-    # fill the area between the two plots
-    # plt.fill_between(df.index, df['cumulative_returns'], df[t+'cumulative_returns'], color='green', alpha=0.5)
+        close_col_names = [c for c in underlying.columns if '_close' == c.lower()[-6:]]
+        for col in close_col_names:
+            col_name = f'{col}_cum_returns'
+            if len(df) != len(underlying[col]):
+                logger.warning(f'Length of underlying price history does not match length of account value history. Skipping {col}.')
+                continue
+            
+            df[col_name] = [100*u/underlying[col].iloc[0] for u in underlying[col]]
+            df[col_name].plot(ax=ax, label=f'{col} cum. returns')
 
-    if save_folder:
-        plt.savefig(f'{save_folder}/cumulative_returns.png')
-
-def visual_analysis_of_trades(account:SimulatedAccount, price_history:pd.DataFrame, save_folder:str=None):
-    plot_trade_durations_vs_profits(account, save_folder)
-    # plot_trade_profit_hist(account)
-    # plot_trade_max_theoretical_profit_vs_drawdown(account, price_history)
-
+        # plot the mean of the underlying cumulative returns
+        if len(close_col_names) > 1:
+            df['mean_underlying_cum_returns'] = df[[f'{c}_cum_returns' for c in close_col_names]].mean(axis=1)
+            df['mean_underlying_cum_returns'].plot(ax=ax, label='Equal weight cum. returns')
+            
+    if ax is None:
+        fig.autofmt_xdate()
+    ax.legend()
     
-def plot_trade_profit_hist(account:SimulatedAccount) -> None:
+
+def plot_trade_profit_hist(account:SimulatedAccount, ax:Optional[plt.Axes]=None) -> Tuple[plt.Figure, plt.Axes]:
     """Makes a histogram of the profits of the trades in an account."""
     trades = account.get_trades()
     profits = [t.get_profit_percent() for t in trades]
-    if len(trades) > 10:
-        fig, (ax1, ax2) = plt.subplots(2,1)
-        ax1.hist(profits, bins=20)
-        ax1.set_title('Trade Profits')
-        ax1.set_xlabel('Profit and loss (%)')
-        ax1.set_ylabel('# trades in this profit range')
-
-        # now plot the trade durations as a histogram on ax2
-        durations = [t.get_duration().total_seconds()/(60*60*24) for t in trades]
-        ax2.hist(durations, bins=20)
-        ax2.set_title('Histogram of Trade Durations')
-        ax2.set_xlabel('Duration (days)')
-        ax2.set_ylabel('# trades in this duration range')
-    else:
-        logger.warning('Not enough trades to plot a histogram of trade profits')
-    return profits
-
-
-def plot_trade_max_theoretical_profit_vs_drawdown(account:SimulatedAccount, price_history:pd.DataFrame) -> None:
-    """Makes a histogram of the profits of the trades in an account."""
-    trades = account.get_trades()
-    theo_profits = [t.max_percent_up for t in trades]
-    if len(trades) > 10:
-        # scatter plot the theoretical max profits with perfect exit within the trade timeframe vs max drawdown
-        fig, ax = plt.subplots(1,1)
-        ax.scatter(theo_profits, [t.max_draw_down for t in trades])
-        ax.set_title('Theoretical Max Profit vs Max Drawdown')
-        ax.set_xlabel('Theoretical Max Profit (%)')
-        ax.set_ylabel('Max Drawdown (%)')
+    
+    if ax is None:
+        fig, ax = plt.subplots()
         
-        # fig, (ax1, ax2) = plt.subplots(2,1)
-        # ax1.hist(theo_profits, bins=20)
-        # ax1.set_title('Trade Max Percent Up')
-        # ax1.set_xlabel('Profit and loss (%)')
-        # ax1.set_ylabel('# trades in this profit range')
-
-        # # now plot the max drawdowns as a histogram on ax2
-        # max_drawdowns = [t.max_draw_down for t in trades]
-        # ax2.hist(max_drawdowns, bins=20)
-        # ax2.set_title('Histogram of Trade Max Drawdowns')
-        # ax2.set_xlabel('Max Drawdown (%)')
-        # ax2.set_ylabel('# trades in this max drawdown range')
-
-        # # now make a new one with a ratio of the profits and drawdowns
-        # fig, ax = plt.subplots(1,1)
-        # ratios = [-t.max_percent_up / t.max_draw_down for t in trades if t.max_draw_down != 0]
-        # ax.hist(ratios, bins=20)
-        # ax.set_title('Trade Max Percent Up / Max Drawdown')
-        # ax.set_xlabel('Profit and loss / Max Drawdown (%)')
-        # ax.set_ylabel('# trades in this profit range')
+    ax.hist(profits, bins=20)
+    ax.set_title('Distribution of Trade Profits')
+    ax.set_xlabel('Profit and loss (%)')
+    ax.set_ylabel('# trades')
+    return fig, ax
 
 
-def plot_trade_durations_vs_profits(account:SimulatedAccount, save_folder:str|None=None) -> None:
+def plot_trade_duration_hist(account:SimulatedAccount, ax:Optional[plt.Axes]=None):
+    trades = account.get_trades()
+    durations = [t.get_duration().total_seconds()/(60*60*24) for t in trades]
+    ax.hist(durations, bins=20)
+    ax.set_title('Histogram of Trade Durations')
+    ax.set_xlabel('Duration (days)')
+    ax.set_ylabel('# trades in this duration range')
+
+
+def plot_trade_durations_vs_profits(account:SimulatedAccount):
     """Plots the trade durations vs the trade profits"""
     trades = account.get_trades()
     profits = [t.get_profit_percent() for t in trades]
@@ -342,5 +295,30 @@ def plot_trade_durations_vs_profits(account:SimulatedAccount, save_folder:str|No
     ax.set_xlabel('Duration (days)')
     ax.set_ylabel('Profit and loss (%)')
 
-    if save_folder:
-        plt.savefig(f'{save_folder}/trade_durations_vs_profits.png')
+        
+def distribution_of_monthly_returns(account:SimulatedAccount):
+    """Plots the distribution of monthly returns as a histogram"""
+    # calculate the monthly returns from the account history
+    
+    monthly_returns = []
+    month_start = None
+    for timestamp, value in account.value_history.items():
+        if month_start is None:
+            month_start = timestamp
+            continue
+        if timestamp.month != month_start.month:
+            # calculate the monthly return
+            monthly_returns.append((value - account.value_history[month_start])/account.value_history[month_start])
+            month_start = timestamp
+
+    if len(monthly_returns) < 12:
+        logger.warning('Not enough data to plot a distribution of monthly returns')
+        return
+
+    fig, ax = plt.subplots(1,1)
+    ax.hist(monthly_returns, bins=20)
+    ax.set_title('Distribution of Monthly Returns')
+    ax.set_xlabel('Monthly Return (%)')
+    ax.set_ylabel('# months in this return range')
+
+        

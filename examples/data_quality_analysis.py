@@ -1,9 +1,10 @@
 import datetime
 import logging
 
-from parallelized_algorithmic_trader.broker import TemporalResolution
-import parallelized_algorithmic_trader.data_management.polygon_io as po
+from parallelized_algorithmic_trader.data_management.data_utils import TemporalResolution
 from parallelized_algorithmic_trader.util import get_logger
+from parallelized_algorithmic_trader.data_management.data import get_candle_data
+
 
 logger = get_logger('path.neat')
 root_logger = get_logger('path')
@@ -14,8 +15,7 @@ n_days = 365
 end = datetime.datetime(2022, 10, 13)
 tickers = ['SPDN', 'SPY']
 tickers = ['SPDN']
-# tickers = ['SPDN']
-candle_data = po.get_candle_data(tickers, end-datetime.timedelta(days=n_days), end, TemporalResolution.MINUTE)
+candle_data = get_candle_data(tickers, TemporalResolution.MINUTE, end-datetime.timedelta(days=n_days))
 
 print(f'There are {len(candle_data.df)} candles in the data')
 print(f'The total shape of the data is {candle_data.df.shape}')

@@ -1,5 +1,6 @@
 import logging
 
+
 from parallelized_algorithmic_trader.util import create_formatted_logger
 
 

@@ -10,7 +10,7 @@ import os
 import pickle
 
 from parallelized_algorithmic_trader.base import Base
-from parallelized_algorithmic_trader.data_management.market_data import TemporalResolution
+from parallelized_algorithmic_trader.data_management.data_utils import TemporalResolution
 from parallelized_algorithmic_trader.orders import *
 from parallelized_algorithmic_trader.util import ACCOUNT_HISTORY_DIRECTORY
 
@@ -27,12 +27,12 @@ class Brokerage(Base):
         super().__init__(name)
 
         self._tickers:Set[str] = set()
-        self._current_price_information:pd.Series|None = None
+        self._current_candles:pd.Series|None = None
 
         # these two below params get set in the set_trading_hours method
         self._market_open_time:datetime.time = datetime.time(9, 30)
         self._market_close_time:datetime.time = datetime.time(16, 0)
-        self._trading_hours = self.set_trading_hours(TradingHours.REGULAR)
+        self._trading_hours = self.set_trading_hours(TradingHours.EXTENDED)
 
     def add_ticker(self, t:str|List[str]):
         """Informs the exchange to expect data related to this ticker to come in over time."""
@@ -113,39 +113,30 @@ class Trade:
         return self.sell.execution_timestamp - self.buy.execution_timestamp
 
 
-OrderData = Dict[str, Dict[OrderSide, List[OrderBase]]] # Dict[ticker, Dict[OrderSide, List[OrderBase]]]
+# Dict[ticker, Dict[OrderSide, List[OrderBase]]]
+OrderData = Dict[str, Dict[OrderSide, List[OrderBase]]] 
 TradeSet = List[Trade]
 
 
 class SimulatedAccount(Base):
-    def __init__(self, account_number, cash=10000):
-        super().__init__(__name__ + '.' + self.__class__.__name__ + '.' + str(account_number)[:8])
+    def __init__(self, 
+                 account_number, 
+                 starting_cash:float=10000, 
+                 compile_trades_at_run_time:bool=False):
+        super().__init__(__name__ + '.' + self.__class__.__name__ + '.' + str(account_number)[:4])
         self.account_number = account_number
-        self.cash:float = cash
+        self.starting_cash = starting_cash
+        self.cash:float = starting_cash             # this is the cash that the account has available to trade with
         self._order_history:OrderData = {}
         self._trade_history:TradeSet = []
         self.value_history:Dict[pd.Timestamp, float] = {}
         self._equities:Dict[str, float] = {}             # this dict uses the symbols as keys and the value is the quantity of shares that this account owns
         self._pending_orders:List[OrderBase] = []
-        self.starting_cash = cash
-
-    @property
-    def has_pending_order(self) -> bool:
-        """Returns True if the account has a pending order"""
-        return self._pending_orders is not None and len(self._pending_orders) > 0
-
-    @property 
-    def has_exposure(self) -> bool:
-        """Returns True if the account has any exposure to any equities"""
-        return sum(self._equities.values()) > 0
-
-    def check_for_exposure(self, ticker:str) -> bool:
-        """Returns True if the account has any exposure to the specified ticker
+        self._compile_trades_at_run_time:bool = compile_trades_at_run_time
         
-        :param ticker: The ticker to check for exposure to
-        """
-        return ticker in self._equities and self._equities[ticker] > 0
-        
+    ########################################################
+    ### Set up and clean up ######
+    ########################################################
     def set_cash(self, cash:float):
         """Sets the cash balance of the account, and tracks this as the starting cash in USD.
         
@@ -162,16 +153,54 @@ class SimulatedAccount(Base):
         self._equities = {}
         self._pending_orders = []
     
+    ########################################################
+    ### Methods for providing telementry
+    ########################################################
+    @property
+    def has_pending_order(self) -> bool:
+        """Returns True if the account has a pending order"""
+        return self._pending_orders is not None and len(self._pending_orders) > 0
+
+    @property 
+    def has_exposure(self) -> bool:
+        """Returns True if the account has any exposure to any equities"""
+        return sum(self._equities.values()) > 0
+
+    def check_for_exposure(self, ticker:str) -> bool:
+        """Returns True if the account has any exposure to the specified ticker
+        
+        :param ticker: The ticker to check for exposure to
+        """
+        return ticker in self._equities and self._equities[ticker] > 0
+      
+    def get_most_recent_valuation(self) -> float:
+        """Returns the most recent valuation of the account"""
+        return self.value_history[max(self.value_history.keys())]
+     
+    def get_exposure(self, ticker:str) -> float:
+        """Returns the number of shares of the specified ticker that the account owns
+        
+        :param ticker: The ticker to check for exposure to
+        """
+        return self._equities[ticker]
+    
+    ########################################################
+    ### Methods for submitting and managing orders
+    ########################################################   
     def submit_new_orders(self, orders:List[OrderBase]):
         """Sets the pending order to the specified order
         
         :param orders: The order to set as the pending order
         """
-        if self.has_pending_order:
-            self.logger.warning(f'Already has pending order(s). Cannot accept another order until the pending order is filled or cancelled.')
-            return
+        # if self.has_pending_order:
+        #     self.logger.warning(f'Already has pending order(s). Cannot accept another order until the pending order is filled or cancelled. New order: {orders}')
+        #     return
         for o in orders:
-            self.logger.debug(f'New pending order {type(o).__name__.upper()} to {o.side.name} ticker {o.ticker}')
+            if o.dollar_amount_to_use == 0 and o.shares == 0:
+                self.logger.debug(f'Order {o} has no dollar amount or share amount specified. Cannot submit order.')
+                continue
+            
+            self.logger.debug(f'New pending {o}')
             self._pending_orders.append(o)
     
     def get_pending_orders(self) -> List[OrderBase]:
@@ -188,12 +217,65 @@ class SimulatedAccount(Base):
             self._order_history[order.ticker] = {OrderSide.BUY:[], OrderSide.SELL:[]}
         self._order_history[order.ticker][order.side].append(order)
         
-        if order.side == OrderSide.SELL:
-            trade = Trade(self._order_history[order.ticker][OrderSide.BUY][-1], order)
-            self._trade_history.append(trade)
+        if self._compile_trades_at_run_time:
+            if order.side == OrderSide.SELL:
+                trade = Trade(self._order_history[order.ticker][OrderSide.BUY][-1], order)
+                self._trade_history.append(trade)
 
+    def cancel_all_pending_orders(self):
+        """Cancels all pending orders"""
+        self.logger.debug('Cancelling all pending orders')
+        # remove all the order before the cancel order
+        while type(self._pending_orders[0]) != CancelAllOrders:
+            self.logger.debug(f'Removing {self._pending_orders[0]}')
+            self._pending_orders.pop(0)
+        # remove the cancel order
+        self._pending_orders.pop(0)
+
+    def cancel_order(self, order_to_cancel:OrderBase):
+        """Searches through pending orders for the order with matching id(object) and cancels it. If no id is matching, uses ticker side and order type."""
+        for i, order in enumerate(self._pending_orders):
+            if id(order) == id(order_to_cancel):
+                self.logger.debug(f'Canceling order: {order}')
+                self._pending_orders.pop(i)
+                return
+        self.logger.warning(f'Could not find order to cancel: {order}')
+        
+    #########################################################
+    ### Methods for analysis of the account's performance ###
+    #########################################################
     def get_trades(self) -> TradeSet:
         return self._trade_history
+    
+    def parse_order_history_into_trades(self, price_history:pd.DataFrame|None=None) -> TradeSet:
+        """Compiles the order history into a list of trades.
+        
+        :return: A list of trades.
+        """
+        self.logger.debug(f'Compiling order history into trades')
+        trades:TradeSet = []
+        self.logger.debug(f'There are {len(self._order_history)} tickers in the order history')
+
+        try:
+            for ticker in self._order_history.keys():
+                # log n trades
+                n_buys = len(self._order_history[ticker][OrderSide.BUY])
+                n_sells = len(self._order_history[ticker][OrderSide.SELL])
+                self.logger.debug(f'Compiling trades for {ticker}. There are {n_buys} buys and {n_sells} sells')
+                self._order_history[ticker][OrderSide.BUY].sort(key=lambda o: o.execution_timestamp)
+                self._order_history[ticker][OrderSide.SELL].sort(key=lambda o: o.execution_timestamp)
+
+                # this implicitly assumes that the buys and sells alternate.
+                for i in range(len(self._order_history[ticker][OrderSide.SELL])):
+                    trades.append(Trade(self._order_history[ticker][OrderSide.BUY][i], self._order_history[ticker][OrderSide.SELL][i]))
+
+            self._trade_history = trades
+            
+            if price_history is not None:
+                self.calculate_meta_data_for_trades(price_history)
+            return trades
+        except Exception as e:
+            self.logger.warning(f'Could not parse order history into trades. Error: {e}')
     
     def calculate_meta_data_for_trades(self, price_history:pd.DataFrame):
         """Compiles the order history of an account into a list of trades.
@@ -315,11 +397,9 @@ class SimulatedStockBrokerCandleData(Brokerage):
         self.spread_percent:float = spread_percent
         self.commission_percent:float = commision_percent
         self.market_order_slippage_model:SlippageModelsMarketOrders = market_order_slippage_model
-
-        self._execution_prices_by_instrument:Dict[str, Dict[OrderSide, float]] = {}                           # this dict uses the symbols as keys and the value is the execution price for the last order
-
+        self.limit_order_slippage:float = limit_order_slippage
         # self._accounts:Dict[uuid.UUID, SimulatedAccount]= {}
-        self.logger.info(f'Initialized with spread: {self.spread_percent}, commission: {self.commission_percent}, slippage: {self.market_order_slippage_model.name}')
+        self.logger.info(f'Initialized with spread: {self.spread_percent}%, commission: {self.commission_percent}, market order slippage: {self.market_order_slippage_model.name}, limit order slippage: ${self.limit_order_slippage}')
 
     def set_spread(self, spread:float):
         """Sets the spread (difference between bid and ask) of the exchange. Value should be a percentage
@@ -352,22 +432,20 @@ class SimulatedStockBrokerCandleData(Brokerage):
         """
         value = account.cash
         for ticker, quantity in account._equities.items():
-            value += quantity * self._current_price_information[ticker+'_close']
+            value += quantity * self._current_candles[ticker+'_close']
         return value
         
     def reset(self):
         """Resets the market to its initial state, clearing all orders and price data"""
 
         self._tickers = set()
-        self._execution_prices_by_instrument = {}
 
     def clean_up(self):
         """Cleans up the market, removing any references to the market. 
         
         (delete information that was only good for this moment in time to ensure that the next time we check, we have a clean slate)"""
         
-        self._current_price_information = None
-        self._execution_prices_by_instrument = {}
+        self._current_candles = None
 
     ###########################################################
     ######## Methods for order flow  ##########################
@@ -377,10 +455,11 @@ class SimulatedStockBrokerCandleData(Brokerage):
         
         :param current_price_info: A pandas series containing the current price information for the simulation
         """
-        self._current_price_information = current_price_info
+        self._current_candles = current_price_info
         
-    def _get_execution_price_for_order(self, order:OrderBase) -> float:
-        """Returns the execution price for an order based on the current candle, the slippage model, and the spread.
+    def _get_execution_price_for_market_order(self, order:OrderBase) -> float:
+        """Returns the execution price for an order based on the current candle, the slippage model, and the spread. 
+        Does not update the variables of the order or the account. 
         
         :param order: The order to get the execution price for
         """
@@ -388,53 +467,32 @@ class SimulatedStockBrokerCandleData(Brokerage):
         # this storage attr for the execution prices gets wiped every time the exchange receives new data, so it should be none
         ticker = order.ticker
         
-        # if we've already calculated this price, return it
-        if self._execution_prices_by_instrument.get(ticker) is not None: 
-            return self._execution_prices_by_instrument[ticker][order.side]
-
         # switch on the order type
-        match type(order).__name__:
-            case 'MarketOrder':
-                candle_open = self._current_price_information[ticker+'_open']
-                candle_close = self._current_price_information[ticker+'_close']
-                candle_high = self._current_price_information[ticker+'_high']
-                candle_low = self._current_price_information[ticker+'_low']
+        if isinstance(order, MarketOrder):
+            candle_open = self._current_candles[ticker+'_open']
+            candle_close = self._current_candles[ticker+'_close']
+            candle_high = self._current_candles[ticker+'_high']
+            candle_low = self._current_candles[ticker+'_low']
 
-                # get the current price data for the relevent instrument
-                if self.market_order_slippage_model == SlippageModelsMarketOrders.NEXT_OPEN:
-                    execution_price = candle_open
-                elif self.market_order_slippage_model == SlippageModelsMarketOrders.NEXT_CLOSE:
-                    execution_price = candle_close
-                elif self.market_order_slippage_model == SlippageModelsMarketOrders.RANDOM_IN_NEXT_CANDLE:
-                    execution_price = np.random.uniform(candle_high, candle_low)
-                elif self.market_order_slippage_model == SlippageModelsMarketOrders.RANDOM_AROUND_NEXT_CANDLE_OPEN:
-                    delta_per_min = abs(candle_high - candle_low)/(self._expected_resolution.get_as_minutes())
-                    execution_price = np.random.normal(candle_open, delta_per_min/4)
-                        
-                # account for the spread and store the execution price for the next time this instrument is traded so we don't have to calculate it again
-                self._execution_prices_by_instrument[ticker] = {
-                    OrderSide.BUY: execution_price * (1 + self.spread_percent/(100)),
-                    OrderSide.SELL: execution_price * (1 - self.spread_percent/(100))
-                }
-                
-            case 'LimitOrder':
-                execution_price = order.limit_price 
-                if order.side == OrderSide.BUY:
-                    execution_price = order.limit_price - self.limit_order_slippage
-                elif order.side == OrderSide.SELL:
-                    execution_price = order.limit_price + self.limit_order_slippage
+            # get the current price data for the relevent instrument
+            if self.market_order_slippage_model == SlippageModelsMarketOrders.NEXT_OPEN:
+                price = candle_open
+            elif self.market_order_slippage_model == SlippageModelsMarketOrders.NEXT_CLOSE:
+                price = candle_close
+            elif self.market_order_slippage_model == SlippageModelsMarketOrders.RANDOM_IN_NEXT_CANDLE:
+                price = np.random.uniform(candle_high, candle_low)
+            elif self.market_order_slippage_model == SlippageModelsMarketOrders.RANDOM_AROUND_NEXT_CANDLE_OPEN:
+                delta_per_min = abs(candle_high - candle_low)/(self._expected_resolution.get_as_minutes())
+                price = np.random.normal(candle_open, delta_per_min/4)
                     
-            case 'StopOrder':
-                execution_price = order.stop_price
-                if order.side == OrderSide.BUY:
-                    execution_price = order.stop_price + self.stop_order_slippage
-                elif order.side == OrderSide.SELL:
-                    execution_price = order.stop_price - self.stop_order_slippage
-            
-            case _:
-                raise Exception(f'Unknown order type: {type(order)}')
-
-        return self._execution_prices_by_instrument[ticker][order.side]
+            # account for the spread
+            if order.side == OrderSide.BUY:
+                price = price * (1 + self.spread_percent/(100))
+            elif order.side == OrderSide.SELL:
+                price = price * (1 - self.spread_percent/(100))
+            return round(price, 2)
+        else:
+            raise Exception(f'Unknown order type: {type(order)}')
 
     def _execute_buy_order(self, account:SimulatedAccount, execution_price:float, order:OrderBase):
         commission = execution_price * self.commission_percent/100
@@ -465,16 +523,19 @@ class SimulatedStockBrokerCandleData(Brokerage):
             account._equities[order.ticker] += quantity
         else:
             account._equities[order.ticker] = quantity
-        account.logger.info("Bought {:.2f} shares of {} at ${:.2f} totaling ${:.2f}. Open: ${:.2f}, Close: ${:.2f} at {}".format(
+        account.logger.info("Bought {:.2f} shares of {} at ${:.2f} totaling ${:.2f} with {}. Open: ${:.2f}, Close: ${:.2f} at {}".format(
             quantity,
             order.ticker,
             execution_price,
             total_trade_value,
-            self._current_price_information[order.ticker+'_open'],
-            self._current_price_information[order.ticker+'_close'],
-            self._current_price_information.name
+            type(order).__name__,
+            self._current_candles[order.ticker+'_open'],
+            self._current_candles[order.ticker+'_close'],
+            self._current_candles.name
         ))
-        order.quantity = quantity
+        account.logger.debug(f'Updated holdings: {account._equities}')
+        
+        order.shares = quantity
         order.commision = commission
         
     def _execute_sell_order(self, account:SimulatedAccount, execution_price:float, order:OrderBase):
@@ -484,17 +545,18 @@ class SimulatedStockBrokerCandleData(Brokerage):
 
         account.cash += total_trade_value
         account._equities[order.ticker] -= quantity
-        account.logger.info("  Sold {:.2f} shares of {} at ${:.2f} totaling ${:.2f}. Open: ${:.2f}, Close: ${:.2f} at {}".format(
+        account.logger.info("  Sold {:.2f} shares of {} at ${:.2f} totaling ${:.2f} with {}. Open: ${:.2f}, Close: ${:.2f} at {}".format(
             quantity,
             order.ticker,
             execution_price,
             total_trade_value,
-            self._current_price_information[order.ticker+'_open'],
-            self._current_price_information[order.ticker+'_close'],
-            self._current_price_information.name
+            type(order).__name__,
+            self._current_candles[order.ticker+'_open'],
+            self._current_candles[order.ticker+'_close'],
+            self._current_candles.name
         ))
         
-        order.quantity = quantity
+        order.shares = quantity
         
     def _execute_pending_order(self, account:SimulatedAccount, execution_price:float, order_index:int):
         """Executes the pending trade at the current price depending on the slippage model. 
@@ -507,8 +569,8 @@ class SimulatedStockBrokerCandleData(Brokerage):
         :param order_index: The index of the order to execute
         """
 
+        self.logger.debug(f'Executing pending {type(account._pending_orders[order_index]).__name__} idx {order_index} at ${execution_price}')
         order = account._pending_orders.pop(order_index)
-
         # figure out how much the account is able to buy/sell
         if order.side == OrderSide.BUY:
             self._execute_buy_order(account, execution_price, order)
@@ -521,76 +583,104 @@ class SimulatedStockBrokerCandleData(Brokerage):
 
         # check the slippage mode to set the timestamp --> below broke some plotting
         # if self.market_order_slippage_model == SlippageModelsMarketOrders.NEXT_OPEN:
-        #     order.execution_timestamp = self._current_price_information.name - datetime.timedelta(minutes=self._expected_resolution.get_as_minutes())
+        #     order.execution_timestamp = self._current_candles.name - datetime.timedelta(minutes=self._expected_resolution.get_as_minutes())
         # elif self.market_order_slippage_model == SlippageModelsMarketOrders.NEXT_CLOSE:
-        #     order.execution_timestamp = self._current_price_information.name
+        #     order.execution_timestamp = self._current_candles.name
 
-        order.execution_timestamp = self._current_price_information.name
+        order.execution_timestamp = self._current_candles.name
         account.append_order_to_account_history(order)
 
     def process_orders_for_account(self, account:SimulatedAccount):
         """Checks all pending orders for execution and executes them if some conditions are met.
+        Uses the candle high and low values to check if the order should be executed on limit, stop orders etc.
         
         :param account: The account to process the orders for
         """
 
         # check if this is a valid time to trade and if there is an order
-        ts:pd.Timestamp = self._current_price_information.name
+        ts:pd.Timestamp = self._current_candles.name
         if not self._check_if_market_is_open(ts): return
-
-        for order_index, order in enumerate(account.get_pending_orders()):
-            # now depending on the order type check if the order should be executed
-            ex_price = self._get_execution_price_for_order(order)
-            order.update(ex_price)  # for trailing orders
-
-            if type(order) == MarketOrder:
-                self._execute_pending_order(account, ex_price, order_index)
-            elif type(order) == TrailingStopOrder:
-                stop = order.stop_price
-                if order.side == OrderSide.BUY and ex_price > stop:
-                        self._execute_pending_order(account, stop, order_index)
-                elif order.side == OrderSide.SELL and ex_price < stop:
-                        self._execute_pending_order(account, stop, order_index)
-            elif 1: raise NotImplementedError(f'{type(order).__name__} are not supported at this time.')
-            
-            elif type(order) == LimitOrder:
-                # check the price and see if this order should get filled
-                if order.side == OrderSide.BUY and ex_price >= order.limit_price:
-                    self._execute_pending_order(account, ex_price)
-
-                elif order.side == OrderSide.SELL and ex_price <= order.limit_price:
-                    self._execute_pending_order(account, ex_price)
-            
-            elif type(order) == StopOrder:
-                # check the price and see if this order should get filled
-                if order.side == OrderSide.BUY and ex_price <= order.stop_price:
-                    self._execute_pending_order(account.account_number, ex_price)
-                elif order.side == OrderSide.SELL and ex_price >= order.stop_price:
-                    self._execute_pending_order(account.account_number, ex_price)
-            
-            elif type(order) == StopLimitOrder:
-                raise NotImplementedError('StopLimitOrder not implemented yet')
-
-                # check the price and see if this order should get filled
-                ex_price = get_price_for_order(order)
-                if order.side == OrderSide.BUY and ex_price <= order.stop_price:
-                    self._execute_pending_order(account.account_number)
-                elif order.side == OrderSide.SELL and ex_price >= order.stop_price:
-                    self._execute_pending_order(account.account_number)
-
-
-class RealBrokerage(Brokerage):
-    def __init__(self, class_name:str, log_level=None):
-        
-        name = __name__ + '.' + class_name
-        if log_level is None: super().__init__(name)
-        else: super().__init__(log_level=log_level)
-
-        self._max_lookback_period = datetime.timedelta(days=14)
-
-    def set_max_lookback_period(self, max_lookback_period_days:int):
-        """Sets the maximum number of days to look back when getting historical data.
-        
-        :param max_lookback_period_days: The maximum number of days to look back when getting historical data."""
-        self._max_lookback_period = datetime.timedelta(days=max_lookback_period_days)
-
+        while len(account._pending_orders) > 0:
+            # loop over each order and check if it should be executed. If so, break as execution will change the list
+            for idx, order in enumerate(account.get_pending_orders()):
+                # handle cases for order types that may not have all ticker/price data properties first
+                if isinstance(order, CancelAllOrders):
+                    account.cancel_all_pending_orders()
+                    break
+                elif isinstance(order, CancelOrder):
+                    account.cancel_order(order.order_to_cancel)
+                    self.logger.debug('Cancelling pending order...')
+                    break
+                
+                high = self._current_candles[order.ticker+'_high']
+                low = self._current_candles[order.ticker+'_low']
+                
+                # now depending on the order type check to execute order, and/or update with current price info
+                if isinstance(order, MarketOrder):
+                    ex_price = self._get_execution_price_for_market_order(order)
+                    self._execute_pending_order(account, ex_price, idx)
+                    break
+                
+                elif isinstance(order, TrailingStopOrder):
+                    if order.side == OrderSide.BUY:
+                        order.update(high)
+                        if order.stop_triggered:
+                            price = order.stop_price + self.limit_order_slippage
+                            self._execute_pending_order(account, price, idx)
+                            break
+                    elif order.side == OrderSide.SELL:
+                            order.update(low)
+                            if order.stop_triggered:
+                                price = order.stop_price - self.limit_order_slippage
+                                self._execute_pending_order(account, price, idx)
+                                break
+                
+                elif isinstance(order, LimitOrder):
+                    # check the price and see if this order should get filled
+                    if order.side == OrderSide.BUY and low <= order.limit_price:
+                        price = order.limit_price + self.limit_order_slippage
+                        self._execute_pending_order(account, price, idx)
+                        break
+                    elif order.side == OrderSide.SELL and high >= order.limit_price:
+                        price = order.limit_price - self.limit_order_slippage
+                        self._execute_pending_order(account, price, idx)
+                        break
+                
+                elif isinstance(order, StopOrder):
+                    # check the price and see if this order should get filled
+                    if order.side == OrderSide.BUY and high >= order.stop_price:
+                        price = order.stop_price + self.limit_order_slippage
+                        self._execute_pending_order(account, price, idx)
+                        break
+                    elif order.side == OrderSide.SELL and low <= order.stop_price:
+                        price = order.stop_price - self.limit_order_slippage
+                        self._execute_pending_order(account, price, idx)
+                        break
+                
+                elif isinstance(order, StopLimitOrder):
+                    # check the price and see if this order should get filled
+                    if order.side == OrderSide.BUY:
+                        if not order.stop_triggered:
+                            order.update(high)
+                        else:
+                            order.update(low)
+                        if order.limit_triggered:
+                            price = order.limit_price + self.limit_order_slippage
+                            self._execute_pending_order(account, price, idx)
+                            break
+                    elif order.side == OrderSide.SELL:
+                        if not order.stop_triggered:
+                            order.update(low)
+                        else:
+                            order.update(high)
+                        if order.limit_triggered:
+                            price = order.limit_price - self.limit_order_slippage
+                            self._execute_pending_order(account, price, idx)
+                            break
+                
+                else:
+                    raise ValueError('Invalid order type: {}'.format(type(order)))
+                
+                # if we've looped over the entire list and not executed anything, we've processed all orders for this tick
+                if idx == len(account.get_pending_orders()) - 1: return   
+                

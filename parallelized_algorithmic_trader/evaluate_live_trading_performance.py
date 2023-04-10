@@ -23,7 +23,7 @@ if __name__ == '__main__':
     if 1:
         # create the nested indicators the strategy to provide insights in plotting
         for indicator_conf in best_strategy.indicator_mapping:
-            if type(indicator_conf.target) == IndicatorConfig and indicator_conf.target.name not in df.columns:
+            if isinstance(indicator_conf.target, IndicatorConfig and indicator_conf.target.name not in df.columns:
 
                 s = indicator_conf.target.make(df)
                 df = pd.concat([df, s], axis=1)

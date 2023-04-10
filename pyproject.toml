@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "parallelized_algorithmic_trader"
-version = "1.0.4"
+version = "1.1.0"
 description = "A python platform for backtesting trading strategies with polygon data source and TD Ameritrade integration."
 authors = ["brucejiverson <brucejamesiverson@gmail.com>"]
 license = "MIT"
@@ -11,20 +11,21 @@ classifiers = [
 
 
 [tool.poetry.dependencies]
-python = "^3.10.0"
-numpy = "^1.19.3"
+python = ">=3.10.0,<4.0.0"
+numpy = ">=1.19.3"
 matplotlib = "^3.3.4"
 pyqt5 = "^5.15.9"                   # for GUI with matplotlib
-scipy  = "^1.6.1"
-td-ameritrade-python-api = "^0.3.5"
-mplfinance = "^0.12.7a17"
+scipy  = ">=1.6.1"
 pandas-ta = "^0.2.45b0"
 polygon-api-client = "^1.7.1"
 hyperopt = "^0.2.7"
 lxml = "^4.9.2"
+alpaca-py = ">=0.7.2"
+PyPDF2 = "=3.0.1"
 
 
 # optional dependencies for examples
+quantstats = "^0.0.59"
 [tool.poetry.extras]
 hyperopt = ["hyperopt"]             # used in an example
 
@@ -35,5 +36,5 @@ hyperopt = ["hyperopt"]             # used in an example
 pytest = "^7.2.1"
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core", "setuptools>=42", "wheel"]
 build-backend = "poetry.masonry.api"

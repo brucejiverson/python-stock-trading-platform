@@ -3,8 +3,8 @@ import datetime
 import logging
 from enum import Enum
 
-from parallelized_algorithmic_trader.polygon_io import get_polygon_key
-from parallelized_algorithmic_trader.market_data import CandleData, TemporalResolution, clean_dataframe
+from parallelized_algorithmic_trader.data_management.polygon_io import get_polygon_key
+from parallelized_algorithmic_trader.data_management.data import CandleData, TemporalResolution, sanitize_dataframe
 
 
 logger = get_logger(__name__)

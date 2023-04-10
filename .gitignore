@@ -1,6 +1,10 @@
 # Ignore local test environment
 .python-version
-
+.pytest_cache
 # Ignore pycache files
 *__pycache__
 
+tmp
+logs
+data
+account_history

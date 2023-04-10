@@ -51,6 +51,9 @@ def create_pdf_performance_report(
         for fig, ax in images:
             pdf.savefig(fig)
             
+            # save each figure as png using the names of all the axes in each fig as the title
+            fig.savefig(os.path.join(save_folder, '_'.join([a.get_title() for a in fig.axes]) + '.png'))
+
 
 def create_table_for_performance_metrics(performance_metrics:Dict[str, str], input_ax:plt.Axes=None) -> Tuple[plt.Figure, plt.Axes]:
     """Create a plot of the performance metrics text. Performance metrics is a dictionary with the row labels as the keys and the cell contents are the values."""

@@ -1,15 +1,19 @@
-from typing import List, Optional, Tuple, Dict
+from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.ticker import Formatter
 import matplotlib.backends.backend_pdf as pdf_backend
 import os
+import seaborn as sns
 
 from parallelized_algorithmic_trader.trading.simulated_broker import SimulatedAccount
 from parallelized_algorithmic_trader.util import get_logger
-
 logger = get_logger(__name__)
+
+
+sns.set(style='ticks', palette='Set2')
+sns.despine()
 
 
 class TimeAxisFormatter(Formatter):
@@ -27,13 +31,12 @@ class TimeAxisFormatter(Formatter):
 
 
 def create_pdf_performance_report(
-    performance_metrics: Dict[str, str], 
+    performance_metrics: dict[str, str], 
     df: pd.DataFrame, 
     account: SimulatedAccount,
-    tickers: List[str] = None, 
+    tickers: list[str] = None, 
     strategy_name: str = '', 
-    save_folder: str | None = None
-) -> None:
+    save_folder: str|None=None) -> None:
     
     images = [
         create_table_for_performance_metrics(performance_metrics),
@@ -42,8 +45,9 @@ def create_pdf_performance_report(
         plot_underwater(account)
     ]
     
+    if save_folder is None: save_folder = 'tmp'
     fname = f'{strategy_name}_performance_report.pdf'
-    fpath = os.path.join(save_folder, fname) if save_folder is not None else fname
+    fpath = os.path.join(save_folder, fname)
     
     with pdf_backend.PdfPages(fpath) as pdf:
         pdf.infodict()['Title'] = fname
@@ -53,9 +57,10 @@ def create_pdf_performance_report(
             
             # save each figure as png using the names of all the axes in each fig as the title
             fig.savefig(os.path.join(save_folder, '_'.join([a.get_title() for a in fig.axes]) + '.png'))
+            logger.info(f'Saved image {fig.axes[0].get_title()} to {save_folder}')
 
 
-def create_table_for_performance_metrics(performance_metrics:Dict[str, str], input_ax:plt.Axes=None) -> Tuple[plt.Figure, plt.Axes]:
+def create_table_for_performance_metrics(performance_metrics:dict[str, str], input_ax:plt.Axes=None) -> tuple[plt.Figure, plt.Axes]:
     """Create a plot of the performance metrics text. Performance metrics is a dictionary with the row labels as the keys and the cell contents are the values."""
     if input_ax is None:
         fig, ax = plt.subplots()
@@ -75,12 +80,11 @@ def create_table_for_performance_metrics(performance_metrics:Dict[str, str], inp
     return fig, ax
 
     
-def parse_columns_by_feature_range(df:pd.DataFrame, tickers:List[str]) -> Tuple[List[str], List[str]]:
+def parse_columns_by_feature_range(df:pd.DataFrame, tickers:list[str]) -> tuple[list[str], list[str]]:
     """Returns the names of the features that should be plotted on the price axis"""
-    
     candle_suffixes = ('_low', '_high', '_open', '_close', '_volume')
     cols_to_ignore = [t+c for t in tickers for c in candle_suffixes]
-    cols_to_ignore.append('Source')
+    cols_to_ignore.extend(['Source', 'idx'])
 
     features_for_price_axis = []
     features_for_special_axis = []
@@ -97,6 +101,7 @@ def parse_columns_by_feature_range(df:pd.DataFrame, tickers:List[str]) -> Tuple[
         
         feature_range = df[feature_name].max(), df[feature_name].min()
         # search for the first valid number of the feature
+        logger.info(f'Checking {feature_name} range for plotting axis')
         for i in range(len(df)):
             if not np.isnan(df[feature_name].iloc[i]):
                 feature_start = df[feature_name].iloc[i]
@@ -114,26 +119,29 @@ def parse_columns_by_feature_range(df:pd.DataFrame, tickers:List[str]) -> Tuple[
     return features_for_price_axis, features_for_special_axis
 
 
-def plot_backtest_results(df:pd.DataFrame, account:SimulatedAccount, tickers:List[str]=None, strategy_name:str='') -> Tuple[plt.Figure, plt.Axes]:
+def plot_backtest_results(df:pd.DataFrame, account:SimulatedAccount, tickers:list[str]=None, strategy_name:str='') -> tuple[plt.Figure, plt.Axes]:
     """Plots the account history, price history of the assets being traded, features, and performance metrics"""
-    
+    # df = input_df.drop(columns=['timestamp'])
     features_for_special_axis = []
     features_for_price_axis = []
     features_for_price_axis, features_for_special_axis = parse_columns_by_feature_range(df, tickers)
-
+    if 'hour' in features_for_special_axis:
+        features_for_special_axis.remove('hour')
     layout = [["price history", "price history"]]
     if len(features_for_special_axis) > 0:
         layout.append(['special features', 'special features'])
-    layout.extend([
-        ["cumulative returns", "cumulative returns"], 
-        ])
-        # ["trade hist", "unused"]
+    if account is not None:
+        layout.extend([
+            ["cumulative returns", "cumulative returns"], 
+            ])
+            # ["trade hist", "unused"]
     
-    fig, axes = plt.subplot_mosaic(layout)
+    fig, axes = plt.subplot_mosaic(layout, sharex=True)
     
-    plot_price_history(df, tickers, features_for_price_axis, axes['price history'])
-    plot_cumulative_returns(account, df, ax=axes['cumulative returns'])
-    # plot_trade_profit_hist(account, ax=axes['trade hist'])
+    plot_price_history(df, tickers, features_for_price_axis, account, axes['price history'])
+    if account is not None:
+        plot_cumulative_returns(account, df, ax=axes['cumulative returns'])
+        # plot_trade_profit_hist(account, ax=axes['trade hist'])
 
     # plot features not on the price axis
     if len(features_for_special_axis) > 0:
@@ -146,12 +154,12 @@ def plot_backtest_results(df:pd.DataFrame, account:SimulatedAccount, tickers:Lis
 
     fig.suptitle(f'Backtest Results for {strategy_name.upper()}', fontsize=14, fontweight='bold')
     fig.autofmt_xdate()
-    fig.tight_layout()
+    # fig.tight_layout()
     
     return fig, axes
     
 
-def plot_underwater(account:SimulatedAccount) -> Tuple[plt.Figure, plt.Axes]:
+def plot_underwater(account:SimulatedAccount) -> tuple[plt.Figure, plt.Axes]:
     """Plots the underwater curve"""
     # get the underwater curve
     latest_high = 0
@@ -169,6 +177,7 @@ def plot_underwater(account:SimulatedAccount) -> Tuple[plt.Figure, plt.Axes]:
     formatter = TimeAxisFormatter(df.index)
     ax.xaxis.set_major_formatter(formatter)
     
+    logger.info(f'Creating underwater curve')
     df.plot(y='underwater', kind='line', label='underwater', color='black', ax=ax)
     plt.title('Underwater Curve')
     plt.ylabel('Underwater (%)')
@@ -183,7 +192,7 @@ def plot_underwater(account:SimulatedAccount) -> Tuple[plt.Figure, plt.Axes]:
     return fig, ax
 
 
-def plot_price_history(df:pd.DataFrame, tickers:List[str], features_to_plot:List[str]=[], input_ax:plt.Axes=None):
+def plot_price_history(df:pd.DataFrame, tickers:list[str], features_to_include:list[str]=[], account:SimulatedAccount=None, input_ax:plt.Axes=None):
     
     if input_ax is None:
         fig, ax = plt.subplots()
@@ -198,16 +207,40 @@ def plot_price_history(df:pd.DataFrame, tickers:List[str], features_to_plot:List
         if i == 0: kwargs = {'color':'black'}
         else: kwargs = {}
         
-        df.reset_index()[f'{t}_close'].plot(ax=ax, label=t, **kwargs)
+    logger.info(f'Creating price history plot')
+    df.reset_index(drop=True)[f'{t}_close'].plot(ax=ax, label=t, **kwargs)
 
     # plot the features that are on the price axis
-    for feature_name in features_to_plot:
+    for feature_name in features_to_include:
         # special case for scatter plots
         if any([txt in feature_name.lower() for txt in ('minima', 'maxima')]):
             df[feature_name] = df[feature_name].replace(0, np.nan)
             ax.scatter(x=range(len(df)), y=df[feature_name], label=feature_name, s=25)
         else:
-            df.reset_index()[feature_name].plot(ax=ax, label=feature_name)
+            df.reset_index(drop=True)[feature_name].plot(ax=ax, label=feature_name)
+    
+    if account is not None:
+        # now plot the trades from the account
+        buys = account.get_all_buys()
+        sells = account.get_all_sells()
+        
+        buy_times = [o.execution_timestamp for o in buys]
+        buy_values = [o.execution_price for o in buys]        
+        
+        sell_times = [o.execution_timestamp for o in sells]
+        sell_values = [o.execution_price for o in sells]
+        
+        if 1:
+            sell_times = [df.index.get_loc(t) for t in sell_times]
+            buy_times = [df.index.get_loc(t) for t in buy_times]
+        
+        # scale the buys and sells up/down cause its prettier
+        buy_values = [b*.9995 for b in buy_values]
+        sell_values = [s*1.0005 for s in sell_values]
+    
+        # now plot the orders
+        ax.scatter(sell_times, sell_values, marker='v', c='r', zorder=4, label='sell')
+        ax.scatter(buy_times, buy_values, marker='^', c='g', zorder=4, label='buy')
 
     ax.legend()
     ax.set_ylabel('Price (USD)')
@@ -220,7 +253,7 @@ def plot_cumulative_returns(
     account:SimulatedAccount, 
     underlying:Optional[pd.DataFrame]=None, 
     ax:Optional[plt.Axes]=None, 
-    save_folder:str=None) -> Tuple[plt.Figure, plt.Axes]:
+    save_folder:str=None) -> tuple[plt.Figure, plt.Axes]:
     """Plots the cumulative returns of the account"""
             
     account_cum_returns = []
@@ -263,7 +296,7 @@ def plot_cumulative_returns(
     ax.legend()
     
 
-def plot_trade_profit_hist(account:SimulatedAccount, ax:Optional[plt.Axes]=None) -> Tuple[plt.Figure, plt.Axes]:
+def plot_trade_profit_hist(account:SimulatedAccount, ax:Optional[plt.Axes]=None) -> tuple[plt.Figure, plt.Axes]:
     """Makes a histogram of the profits of the trades in an account."""
     trades = account.get_trades()
     profits = [t.get_profit_percent() for t in trades]
@@ -271,7 +304,9 @@ def plot_trade_profit_hist(account:SimulatedAccount, ax:Optional[plt.Axes]=None)
     if ax is None:
         fig, ax = plt.subplots()
         
-    ax.hist(profits, bins=20)
+    # ax.hist(profits, bins=20)
+    # plot a histogram of the profits with the color of the bins green for profits > 0 and and red for profits < 0
+    ax.hist(profits, bins=20)#, color=['red' if p < 0 else 'green' for p in profits]) TO DO
     ax.set_title('Distribution of Trade Profits')
     ax.set_xlabel('Profit and loss (%)')
     ax.set_ylabel('# trades')

@@ -180,8 +180,8 @@ def sanitize_dataframe(df:pd.DataFrame) -> pd.DataFrame:
         # drop any duplicate timestamps
         formatted_df.drop_duplicates(subset='timestamp', inplace=True)
         formatted_df.set_index('timestamp', inplace=True, verify_integrity=True, drop=True)
-    elif 'timestamp' in formatted_df.columns:
-        formatted_df.drop('timestamp', axis=1, inplace=True)
+    # elif 'timestamp' in formatted_df.columns:
+    #     formatted_df.drop('timestamp', axis=1, inplace=True)
     
     # sort by index
     formatted_df.sort_index(inplace=True)

@@ -27,7 +27,7 @@ class EquityData(Base):
 
 
 class CandleData(EquityData):
-    def __init__(self, df:pd.DataFrame, tickers:List[str], resolution: data_utils.TemporalResolution):
+    def __init__(self, df:pd.DataFrame, tickers:List[str], resolution:data_utils.TemporalResolution):
 
         super().__init__(resolution)
         self.df:pd.DataFrame = CandleData.vaidate_and_clean_data(df, tickers)
@@ -46,9 +46,9 @@ class CandleData(EquityData):
         """
         
         # validate that the column names are named correctly
-        kwards = ['open', 'high', 'low', 'close', 'volume']
+        required_candle_suffixes = ['open', 'high', 'low', 'close', 'volume']
         for tckr in tickers:
-            for kw in kwards:
+            for kw in required_candle_suffixes:
                 assert tckr + '_' + kw in df.columns, f'Column {tckr + "_" + kw} not found in df'
 
         if 0:
@@ -346,7 +346,10 @@ def get_candle_data(
         API_KEY = os.environ.get('ALPACA')
     if SECRET_KEY is None:
         SECRET_KEY = os.environ.get('ALPACA_SECRET')
-        
+    
+    if API_KEY is None or SECRET_KEY is None:
+        raise Exception('API_KEY or SECRET_KEY not provided and no environment variables found.')
+
     if end_date is None:
         logger.debug('No end date provided, defaulting to today.')
         end_date = datetime.datetime.now() - datetime.timedelta(days=2)

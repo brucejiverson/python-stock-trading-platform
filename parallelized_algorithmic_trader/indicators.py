@@ -1,10 +1,11 @@
 from __future__ import annotations
 import logging
-from typing import Dict, Any, Tuple, List, Set
+from typing import Dict, Any, Tuple, List, Set, Union
 from dataclasses import dataclass, field
 import pandas as pd
 import pandas_ta as ta
-from enum import Enum
+import copy
+
 from parallelized_algorithmic_trader.util import get_logger
 
 
@@ -25,7 +26,7 @@ class IndicatorConfig:
         desired_output_name_keywords: List[str]|None, if the Indicator has multiple outputs, this is a list of keywords that will keep only specified outputs
         
     """
-    target: str|IndicatorConfig                                         # this is the data that the Indicator is constructed on top of. Symbol or another Indicator
+    target: str|'IndicatorConfig'                                       # this is the data that the Indicator is constructed on top of. Symbol or another Indicator
     construction_func: function|None                                    # the class that will be used to construct the Indicator
     args: Tuple[Any, ...] = field(default_factory=tuple)
     kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -36,6 +37,9 @@ class IndicatorConfig:
     config_name:str = field(default=None)                               # initialized in post init
 
     def __post_init__(self):
+        self.set_name()
+    
+    def set_name(self):
         self.args = tuple(self.args)
         if len(self.kwargs) == 0:
             kwargs_str = ""
@@ -52,26 +56,6 @@ class IndicatorConfig:
             raise ValueError(f'IndicatorConfig.target must be a string or another IndicatorConfig. It is {type(self.target)}')
         
         self.config_name = f'{target_str}_{constructor_name}{self.args}{kwargs_str}'
-        
-        # self.names:List[str] = [f'{target_str}_{constructor_name}{self.args}{kwargs_str}']
-        # if self.construction_func.__name__ == 'BB':
-        #     col_identifiers = ('BBL', 'BBM', 'BBU', 'BBP', 'BBB')
-        #     self.names = [f'{target_str}_{col_id}{self.args}{kwargs_str}' for col_id in col_identifiers]
-        # elif self.construction_func.__name__ == 'MACD':
-        #     col_identifiers = ('MACD', 'MACDh', 'MACDs')
-        #     self.names = [f'{target_str}_{col_id}{self.args}{kwargs_str}' for col_id in col_identifiers]
-        # elif self.construction_func.__name__ == 'SUPERTREND':
-        #     col_identifiers = ('SUPERTREND', 'SUPERTRENDd', 'SUPERTRENDl', 'SUPERTRENDs')
-        #     self.names = [f'{target_str}_{col_id}{self.args}{kwargs_str}' for col_id in col_identifiers]
-        # elif self.construction_func.__name__ == "ZBB":
-        #     col_identifiers = ('ZBBU', 'ZBBM', 'ZBBL', 'ZBBP', 'ZBBB')
-        #     self.names = [f'{target_str}_{col_id}{self.args}{kwargs_str}' for col_id in col_identifiers]
-            
-        # logger.debug(f'Indicator names in __post_init__ before filtering: {self.names}')
-        # if self.desired_output_name_keywords is not None:
-        #     self.names = [n for n in self.names if any([k.lower() in n.lower() for k in self.desired_output_name_keywords])]
-            
-        # logger.debug(f'IndicatorConfig.__post_init__ names: {self.names}')
 
     def make(self, df: pd.DataFrame) -> pd.Series | pd.DataFrame | None:
         """Construct the Indicator and return it as a DataFrame."""
@@ -87,26 +71,24 @@ class IndicatorConfig:
         target_str = self.target if isinstance(self.target, str) else self.target.config_name
         logger.debug(f'Constructing Indicator {self.construction_func.__name__} on {target_str} with args: {self.args} and kwargs: {self.kwargs}')
 
-        # make a copy of the dataframe so that we can add features that may not be a part of the final dataframe 
-        temp_df = df[self.get_root_targets()]
+        # # make a copy of the dataframe so that we can add features that may not be a part of the final dataframe 
+        # temp_df = df[self.get_root_targets()]
         
         if isinstance(self.target, str):
             logger.debug(f'Target is a string. Target: {self.target}')
             target_col_name = self.target
         elif isinstance(self.target, IndicatorConfig):
             logger.debug(f'Target is an IndicatorConfig. Constructing it first.')
-            
+            logger.warning(f'Target names: {self.target.names}, columns: {df.columns.to_list()}')
             if not all([name in df.columns for name in self.target.names]) or 1:
                 logger.debug(f'Constructing target indicator {self.target.names}')
-                target_indicator = self.target.make(df)
-                temp_df = pd.concat([temp_df, target_indicator], axis=1)
-                
+                df = pd.concat([df, self.target.make(df)], axis=1)
             target_col_name = self.target.names[0]
         else:
             raise ValueError(f'IndicatorConfig.target must be a string or another IndicatorConfig. It is {type(self.target)}')
 
-        logger.debug(f'Making indicator on {target_col_name} args: {self.args}, temp_dfhead: \n{temp_df.head()}')
-        ind:pd.Series|pd.DataFrame = self.construction_func(temp_df, target_col_name, *self.args, **self.kwargs)
+        logger.debug(f'Making indicator on {target_col_name} args: {self.args}, temp_dfhead: \n{df.head()}')
+        ind:pd.Series|pd.DataFrame = self.construction_func(df, target_col_name, *self.args, **self.kwargs)
         logger.debug(f'Indicator constructed. ind.head(): \n{ind.head()} \n ind.tail(): \n{ind.tail()}')
         
         # only include the desired columns
@@ -130,6 +112,7 @@ class IndicatorConfig:
         else:
             raise TypeError(f'IndicatorConfig.make() must return a pd.Series or pd.DataFrame. It returned {type(ind)}')
         
+        # only do operations if needed to save computation time
         if self.bias != 0.0:
             ind = ind + self.bias
         if self.scaling_factor != 1.0:
@@ -155,17 +138,38 @@ class IndicatorConfig:
             raise ValueError(f'IndicatorConfig.target must be a string or another IndicatorConfig. It is {type(self.target)}')
 
 
-def SMA(df: pd.DataFrame, ticker:str, period: int) -> pd.Series:
-    sma = ta.sma(df[ticker+'_close'], length=period)
+def set_scaler_for_all_features(indicator_map:IndicatorMapping, scaler:IndicatorConfig) -> IndicatorMapping:
+    """Applies the scaler to all of the features in the indicator mapping.
+    
+    Parameters:
+        indicator_map: the indicator mapping to apply the scaler to
+        scaler: the scaler to apply to the indicator mapping
+
+    Returns:
+        a new indicator mapping with the scaler applied to all of the features
+    """
+    
+    if scaler is None: return indicator_map
+    
+    new_mapping = []
+    for ind_config in indicator_map:
+        scaler.target = ind_config
+        scaler.set_name()
+        new_mapping.append(copy.deepcopy(scaler))
+    return new_mapping
+
+
+def SMA(df:pd.DataFrame, target:str, period:int) -> pd.Series:
+    sma = ta.sma(df[target], length=period)
     return sma
 
 
-def EMA(df: pd.DataFrame, ticker:str, period: int) -> pd.Series:
-    ema = ta.ema(df[ticker+'_close'], length=period)
+def EMA(df:pd.DataFrame, target:str, period:int) -> pd.Series:
+    ema = ta.ema(df[target], length=period)
     return ema
 
 
-def DIFF(df: pd.DataFrame, target_col:str, tool_col:str) -> pd.Series:
+def DIFF(df:pd.DataFrame, target_col:str, tool_col:str) -> pd.Series:
     """The difference between the tool column and the target column"""
     logger.debug(f'DIFF: target_col: {target_col}, tool_col: {tool_col}')
     
@@ -174,13 +178,13 @@ def DIFF(df: pd.DataFrame, target_col:str, tool_col:str) -> pd.Series:
     return diff
 
 
-def VWAP(df: pd.DataFrame, ticker:str) -> pd.Series:
+def VWAP(df:pd.DataFrame, ticker:str) -> pd.Series:
     suffix = ('_high', '_low', '_close', '_volume')
     vwap = ta.vwap(*[df[ticker + s] for s in suffix], anchor='D')
     return vwap
 
 
-def RSI(df: pd.DataFrame, target:str, length:Any|None=None, scalar:Any|None=None) -> pd.Series:
+def RSI(df:pd.DataFrame, target:str, length:Any|None=None, scalar:Any|None=None) -> pd.Series:
     rsi = ta.rsi(df[target], length=length, scalar=scalar)
     return rsi
 
@@ -190,7 +194,7 @@ def OBV(df:pd.DataFrame, ticker:str) -> pd.Series:
     return obv
 
 
-def BB(df: pd.DataFrame, target_col: str, period: int, stdd:int=2) -> pd.DataFrame:
+def BB(df:pd.DataFrame, target_col: str, period: int, stdd:int=2) -> pd.DataFrame:
     bb = ta.bbands(df[target_col], length=period, std=stdd)
 
     logger.debug(f'BB ta lib columns: {bb.columns}')
@@ -295,7 +299,7 @@ def ZBB(df: pd.DataFrame, target_col:str, period:int, stddev:float) -> pd.Series
 def SUPERTREND(df: pd.DataFrame, ticker:str, period:int, multiplier:float) -> pd.DataFrame:
     st = ta.supertrend(df[ticker+'_high'], df[ticker+'_low'], df[ticker+'_close'], period, multiplier)
         
-    # rename the columns  
+    # rename the columns 
     new_names = []
     keywords = ('SUPERT_', 'SUPERTd', 'SUPERTl', 'SUPERTs')
     formated_keywords = ('SUPERTREND', 'SUPERTRENDd', 'SUPERTRENDl', 'SUPERTRENDs')
@@ -351,7 +355,17 @@ def STANDARD_SCALER(df:pd.DataFrame, target:str) -> pd.Series:
     return (df[target] - df[target].mean())/df[target].std()
 
 
-IndicatorMapping = List[IndicatorConfig] 
+class IndicatorMapping(list):
+    """A list of indicator configs"""
+    def __init__(self, *items):
+        super().__init__(items)
+        self.feature_names = self.get_all_feature_names()
+    
+    def get_all_feature_names(self):
+        names = []
+        [names.extend(indconf.names) for indconf in self]
+        self.feature_names = names
+        return names
 
 
 # class IndicatorMapping(list):
@@ -412,6 +426,7 @@ def check_if_indicator_mappings_identical(m1:IndicatorMapping, m2:IndicatorMappi
 
 def aggregate_indicator_mappings(mappings: List[IndicatorMapping]) -> IndicatorMapping:
     """Aggregate multiple IndicatorMappings into a single IndicatorMapping with no duplicates"""
+    if len(mappings) == 1: return mappings[0]
     aggregated:IndicatorMapping = []
     names_of_indicators_weve_found:List[str] = []
 

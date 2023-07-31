@@ -38,12 +38,13 @@ class OrderBase(object):
             s+= f' ticker {self.ticker}'
         if self.dollar_amount_to_use is not None:
             s+= f' for ${self.dollar_amount_to_use}'
-        
         return s
 
     def get_transaction_value(self) -> float | None:
         """Returns the value of the transaction in dollars, product of execution price and shares."""
         if self.execution_price is None or self.shares is None:
+            print(f'Failed to get transaction value for {self} because execution price or shares is None')
+            print(f'Info: execution price: {self.execution_price}, shares: {self.shares}')
             return None
         return self.execution_price * self.shares
 
@@ -56,7 +57,7 @@ class OrderBase(object):
 
     
 class MarketOrder(OrderBase):
-    def __init__(self, account_number:uuid.UUID, ticker:str, side:OrderSide, dollars:float=None, shares=None):
+    def __init__(self, account_number:uuid.UUID, ticker:str, side:OrderSide, dollars:float=None, shares:float=None):
         super().__init__(account_number, ticker, side, dollars, shares)
 
 

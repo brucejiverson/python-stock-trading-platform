@@ -5,6 +5,8 @@ import parallelized_algorithmic_trader.orders as orders                         
 from parallelized_algorithmic_trader.strategy import StrategyBase                           # algorithm
 from parallelized_algorithmic_trader.trading.simulated_broker import SimulatedAccount
 from parallelized_algorithmic_trader.indicators import IndicatorConfig, IndicatorMapping    # feature construction
+from numba import jit, types
+from numba.typed import List as NumbaList
 
 
 """Warning! Do no expect any of these to make you money! They are just examples to help you get started."""
@@ -120,6 +122,65 @@ class TwoEMACross(StrategyBase):
         # parse the indicator mapping for the EMA with the smallest and largest window
         fast_idx = None
         slow_idx = None
+        smallest_period_found = None
+        
+        for idx, ic in enumerate(self.indicator_mapping):
+            if 'EMA' in ic.config_name:
+                if smallest_period_found is None:
+                    smallest_period_found = ic.args[0]
+                    fast_idx = idx
+                elif ic.args[0] < smallest_period_found:
+                    smallest_period_found = ic.args[0]
+                    fast_idx = idx
+                else:
+                    slow_idx = idx
+        
+        self._fast_ema_idx = fast_idx
+        self._slow_ema_idx = slow_idx
+        self._fast_ema_name = self.indicator_mapping[fast_idx].names[0]
+        self._slow_ema_name = self.indicator_mapping[slow_idx].names[0]
+        
+        self.logger.info(f'Using fast EMA: {self._fast_ema_name}, slow EMA: {self._slow_ema_name}')
+        
+    def get_indicator_mapping_by_name(self, name:str) -> IndicatorConfig:
+        for ic in self.indicator_mapping:
+            if ic.name == name: return ic
+        raise ValueError(f'IndicatorConfig with name {name} not found')
+
+    def act(self, state:Dict[str, float], account:dict[str, float], pending_orders:list[tuple]) -> tuple[list[str, str, str, float]]:
+        fast_ema_val = state[self._fast_ema_idx]
+        slow_ema_val = state[self._slow_ema_idx]
+        
+        # entry condition
+        if fast_ema_val > slow_ema_val and not (account[1:] > 0).any() and not len(pending_orders) > 0:
+            self.logger.debug('BUY CREATE')
+            return NumbaList([NumbaList(['MarketOrder', 'BUY', self._tickers[0]])])
+
+        # exit condition: cancel stop loss and do a market order
+        if fast_ema_val < slow_ema_val and (account[1:] > 0).any() and not len(pending_orders) > 0:
+            # return [orders.MarketOrder(self.account_number, self._tickers[0], orders.OrderSide.SELL)]
+            self.logger.debug(f'SELL CREATE')
+            return NumbaList([NumbaList(['MarketOrder', 'SELL', self._tickers[0]])])
+        return NumbaList([])
+
+
+# from numba import 
+
+class TwoEMACrossJIT(StrategyBase):
+    """An implementation of the TwoEMACross strategy using numba's jit compiler"""
+    
+    def __init__(
+        self, 
+        indicators:IndicatorMapping,
+        tickers:List[str],
+        log_level:int=None):
+        name = self.__class__.__name__
+        super().__init__(None, name, tickers, indicators)
+        if log_level is not None: self.logger.setLevel(log_level)
+
+        # parse the indicator mapping for the EMA with the smallest and largest window
+        fast_idx = None
+        slow_idx = None
         cur_price_idx = None
         smallest_period_found = None
         
@@ -136,25 +197,24 @@ class TwoEMACross(StrategyBase):
             elif 'close' in ic.config_name:
                 cur_price_idx = idx
         
+        self._fast_ema_idx = fast_idx
+        self._slow_ema_idx = slow_idx
         self._fast_ema_name = self.indicator_mapping[fast_idx].names[0]
         self._slow_ema_name = self.indicator_mapping[slow_idx].names[0]
-        self._price_name = self.indicator_mapping[cur_price_idx].target
-        self.logger.info(f'Using fast EMA: {self._fast_ema_name}, slow EMA: {self._slow_ema_name}, price: {self._price_name}')
         
-    def get_indicator_mapping_by_name(self, name:str) -> IndicatorConfig:
-        for ic in self.indicator_mapping:
-            if ic.name == name: return ic
-        raise ValueError(f'IndicatorConfig with name {name} not found')
-
-    def act(self, account:SimulatedAccount, state:Dict[str, float]) -> List[orders.OrderBase] | None:
-        fast_ema_val = state[self._fast_ema_name]
-        slow_ema_val = state[self._slow_ema_name]
+    def act(self, state:types.float32[:], account:types.float32[:], pending_orders:types.float32[:]) -> types.float32[:]:
+        fast_ema_val = state[self._fast_ema_idx]
+        slow_ema_val = state[self._slow_ema_idx]
         
         # entry condition
-        if fast_ema_val > slow_ema_val and not account.has_exposure and not account.has_pending_order:
-            return [orders.MarketOrder(self.account_number, self._tickers[0], orders.OrderSide.BUY)]
+        if fast_ema_val > slow_ema_val and not (account[1:] > 0).any() and not len(pending_orders) > 0:
+            return NumbaList([NumbaList(['MarketOrder', 'BUY', self._tickers[0]])])
 
         # exit condition: cancel stop loss and do a market order
-        if fast_ema_val < slow_ema_val and account.has_exposure and not account.has_pending_order:
-            return [orders.MarketOrder(self.account_number, self._tickers[0], orders.OrderSide.SELL)]
+        if fast_ema_val < slow_ema_val and (account[1:] > 0).any() and not len(pending_orders) > 0:
+            return NumbaList([NumbaList(['MarketOrder', 'SELL', self._tickers[0]])])
+        return NumbaList([])
 
+
+
+        

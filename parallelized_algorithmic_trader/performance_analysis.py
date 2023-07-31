@@ -6,7 +6,7 @@ import pandas as pd
 from scipy.optimize import curve_fit
 
 from parallelized_algorithmic_trader.data_management.data import CandleData
-from parallelized_algorithmic_trader.trading.simulated_broker import SimulatedAccount, OrderSide, AccountHistoryFileHandler, AccountHistoryFileHandlerSet
+from parallelized_algorithmic_trader.trading.simulated_broker import SimulatedAccount, OrderSide, TradingHistory, TradingHistorySet
 from parallelized_algorithmic_trader.util import get_logger
 
 
@@ -14,12 +14,12 @@ logger = get_logger(__name__)
 # logger.setLevel(logging.INFO)
 
 
-def get_best_strategy_and_account(results=AccountHistoryFileHandlerSet) -> AccountHistoryFileHandler:
+def get_best_strategy_and_account(results:TradingHistorySet) -> TradingHistory:
     """find the account with the best performance. Note that this assumes that all accounts have cashed out."""
-    highest_value = 0
+    highest_value = -1
     best_result = None
     for r in results:
-        if AccountHistoryFileHandler.final_value > highest_value:
+        if r.final_value > highest_value:
             highest_value = r.final_value
             best_result = r
     return best_result
@@ -29,6 +29,14 @@ def func_for_list_if_length(list:List, func) -> Any:
     """Returns the result of the function if the list is not empty, otherwise returns 0."""
     if len(list) == 0: return 0
     return func(list)
+
+
+def prettify_time(hours:float) -> str:
+    """Converts to a readable string of either hours or days."""
+    
+    if hours < 40:
+        return f'{hours:.1f} hours'
+    return f'{hours/24:.1f} days'
 
 
 def print_account_stats(account:SimulatedAccount, underlying:CandleData=None, spread=None, market_slippage=None, limit_slippage=None) -> Dict[str, str]:
@@ -57,7 +65,7 @@ def print_account_stats(account:SimulatedAccount, underlying:CandleData=None, sp
     if market_slippage is not None:
         log_and_append('Slippage for market orders', market_slippage.name)
     if limit_slippage is not None:
-        log_and_append('Slippage for limit orders', f'{limit_slippage:.4f}')
+        log_and_append('Slippage for limit orders', f'${limit_slippage:.2f}')
         
     history = account.get_history_as_list()
     
@@ -92,11 +100,11 @@ def print_account_stats(account:SimulatedAccount, underlying:CandleData=None, sp
     trade_durations = [t.get_duration().total_seconds() for t in trades]
     mean_trade_duration = func_for_list_if_length(trade_durations, np.mean)/(60*60)
     trade_duration_std = func_for_list_if_length(trade_durations, np.std)/(60*60)
-    log_and_append('Mean time to exit', f'{mean_trade_duration:.0f} hours, stddev {trade_duration_std:.0f}')
+    log_and_append('Mean time to exit', f'{prettify_time(mean_trade_duration)}, stddev {prettify_time(trade_duration_std)}')
     
     buy_to_buy_times:List[pd.Timedelta] = [t1.buy.execution_timestamp - t2.buy.execution_timestamp for t1, t2 in zip(trades[1:], trades[:-1])]
     mean_time_between_trades = func_for_list_if_length([t.total_seconds() for t in buy_to_buy_times], np.mean)/(60*60)
-    log_and_append('Mean time from buy to buy', f'{mean_time_between_trades:.0f} hours, {mean_time_between_trades/24:.2f} days')
+    log_and_append('Mean time from buy to buy', f'{prettify_time(mean_time_between_trades)}, stddev {prettify_time(func_for_list_if_length([t.total_seconds() for t in buy_to_buy_times], np.std)/(60*60))}')
     log_and_append('Win rate', f'{get_win_percentage(trades=trades):.1f} %')  
     
     # complex metrics
@@ -105,13 +113,13 @@ def print_account_stats(account:SimulatedAccount, underlying:CandleData=None, sp
         log_and_append(f'Alpha relative to {ticker}', f'{alpha:.2f}%')
     
     log_and_append('VWR', f'{get_vwr(history):.3f}')
-    log_and_append('VWR curve fit', f'{get_curve_fit_vwr(history):.3f}')
+    # log_and_append('VWR curve fit', f'{get_curve_fit_vwr(history):.3f}')
 
     # set the global variable for this
     ticker = underlying.tickers[0]
-    set_benchmark_score(underlying.df[ticker+'_close'], get_curve_fit_vwr)
-    vwr_diff = get_vwr_curve_fit_difference(history)
-    log_and_append('VWR difference', f'{vwr_diff:.4}')
+    # set_benchmark_score(underlying.df[ticker+'_close'], get_curve_fit_vwr)
+    # vwr_diff = get_vwr_curve_fit_difference(history)
+    # log_and_append('VWR difference', f'{vwr_diff:.4}')
     return analysis_data
 
     
@@ -377,5 +385,3 @@ def get_vwr_curve_fit_difference(account_values:Collection):
     
     account_vwr = get_curve_fit_vwr(account_values)
     return account_vwr - UNDERLYING_SCORE  
-
-

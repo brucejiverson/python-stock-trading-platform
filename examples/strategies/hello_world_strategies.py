@@ -1,4 +1,3 @@
-from typing import Dict, List
 import uuid
 
 from parallelized_algorithmic_trader.indicators import IndicatorMapping
@@ -14,7 +13,7 @@ class RandomBot(StrategyBase):
         self, 
         account_number:uuid.UUID, 
         indicator_mapping:IndicatorMapping,
-        tickers:List[str],
+        tickers:list[str],
         log_level:int=None):
         name = __name__ + '.' + self.__class__.__name__ + '.' + str(account_number)[:8]
         super().__init__(account_number, name, tickers, indicator_mapping)
@@ -39,7 +38,7 @@ class RandomBot(StrategyBase):
         )
         self.logger.debug(f'time til next order is now: {self.time_til_next_order} timesteps.')
 
-    def act(self, _:Dict[str, float]=None) -> List[OrderBase] | None:
+    def act(self, _:dict[str, float]=None) -> list[OrderBase] | None:
         # self.log('Close, %.2f' % self.dataclose[0])
         self.time_til_next_order -= 1
         # Check if an order is pending ... if yes, we cannot send a 2nd one
@@ -73,14 +72,14 @@ class NeverSell(StrategyBase):
         self, 
         account_number:uuid.UUID, 
         indicator_mapping:IndicatorMapping,
-        tickers:List[str],
+        tickers:list[str],
         log_level:int=None):
         name = __name__ + '.' + self.__class__.__name__ + '.' + str(account_number)[:8]
         super().__init__(account_number, name, tickers, indicator_mapping)
 
         if log_level is not None: self.logger.setLevel(log_level)
 
-    def act(self, _:Dict[str, float]=None) -> OrderBase | None:
+    def act(self, _:dict[str, float]=None) -> OrderBase | None:
         # Check if an order is pending ... if yes, we cannot send a 2nd one
         if self._pending_order:
             self.logger.debug(f'waiting for order to execute...')
@@ -103,7 +102,7 @@ class SimpleSignal(StrategyBase):
         self, 
         account_number:uuid.UUID, 
         indicator_mapping:IndicatorMapping,
-        tickers:List[str], 
+        tickers:list[str], 
         log_level:int=None, 
         buy_ind_kwd=None,
         sell_ind_kwd=None,):
@@ -125,7 +124,7 @@ class SimpleSignal(StrategyBase):
             self._sell_signal_name:str = [name for config in self.indicator_mapping for name in config.names if sell_ind_kwd in name][0]
         self.logger.info(f'Using signal name for buy: {self._buy_signal_name}, Using signal name for buy: {self._sell_signal_name}')
     
-    def act(self, account:Account, cur_state:Dict[str, float]) -> OrderBase | None:
+    def act(self, account:Account, cur_state:dict[str, float]) -> OrderBase | None:
         # Check if an order is pending ... if yes, we cannot send a 2nd one
         if account.has_pending_order: # and type(account.get_pending_order()) != TrailingStopOrder:
             return None
